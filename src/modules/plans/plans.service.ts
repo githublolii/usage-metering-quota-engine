@@ -104,11 +104,23 @@ export async function updateCustomPlan(
  * orphan live quota bindings (decisions must always resolve against
  * existing rules). Rebind the subjects first (PATCH /accounts/plan,
  * PATCH /users/:userId/plan), then delete.
+ *
+ * Ordering is load-bearing for the IDOR posture: OWNERSHIP is verified
+ * first — a predefined catalog plan or another tenant's plan is
+ * indistinguishable from nonexistent (404) and must never leak binding
+ * information through a 409.
  */
 export async function deleteCustomPlan(
   accountId: string,
   planId: string,
-): Promise<{ deleted: true; name: string }> {
+): Promise<void> {
+  const plan = await plansRepo.findPlanById(pool, planId as PlanId);
+  if (plan === null || plan.isPredefined || plan.accountId !== accountId) {
+    throw new NotFoundError(
+      'Plan not found. Only custom plans owned by your account can be deleted.',
+    );
+  }
+
   const bindings = await plansRepo.countPlanBindings(pool, planId as PlanId);
   if (bindings.accounts > 0 || bindings.users > 0) {
     throw new ConflictError(
@@ -127,7 +139,6 @@ export async function deleteCustomPlan(
       'Plan not found. Only custom plans owned by your account can be deleted.',
     );
   }
-  return { deleted: true, name: planId };
 }
 
 export interface PlanReference {

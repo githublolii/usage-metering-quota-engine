@@ -1,6 +1,6 @@
 # Usage Metering & Quota Engine
 
-![Node](https://img.shields.io/badge/Node-%E2%89%A520.11-339933) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-4169E1) ![Tests](https://img.shields.io/badge/tests-102%20passing-2EA44F) ![License](https://img.shields.io/badge/license-MIT-blue)
+![Node](https://img.shields.io/badge/Node-%E2%89%A520.11-339933) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-4169E1) ![Tests](https://img.shields.io/badge/tests-117%20passing-2EA44F) ![License](https://img.shields.io/badge/license-MIT-blue)
 
 Mission-critical, multi-tenant **usage metering and quota engine** in TypeScript + PostgreSQL.
 
@@ -314,16 +314,21 @@ this implementation resolves each, and why:
 | `npm run test:unit` | 60 pure-domain tests | Every limit boundary (limit−1 / limit / limit+1 × 4 rules), downgrade semantics, deterministic precedence, programmer-error contracts, Result monad, Zod DTOs |
 | `npm run test:integration` | HTTP tests | The six-phase story end-to-end, idempotent replay of accepted *and* rejected decisions, plan mutation preserving usage, RFC 7807 shapes, cross-tenant IDOR attack suite, rotation atomicity, **custom-plan CRUD lifecycle, monthly reset & previous-month reads** |
 | `npm run test:concurrency` | Race suites | 250-into-50 quota storm, 40-way same-key race, 240-request mixed-user deadlock hunt, **plan mutation racing live consumption** — all asserted against SQL ground truth |
-| `npm test` | All of the above | Every run boots a pristine embedded PostgreSQL |
+| `npm test` | All of the above | 117 tests; every run boots a pristine embedded PostgreSQL |
 
 CI with an external PostgreSQL: set `TEST_DATABASE_URL` and `npm test` uses
-it instead of booting the embedded one.
+it instead of booting the embedded one. A committed GitHub Actions workflow
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs type-check,
+build, and the full storm suite on every push — and can trigger the
+benchmark manually (`workflow_dispatch`), uploading `perf/results/` as
+artifacts.
 
 ---
 
 ## Project structure
 
 ```
+.github/workflows/ci.yml        CI: typecheck · build · full storm suite (self-contained PostgreSQL)
 src/
   config/env.ts                  Zod-validated environment (fail-fast boot)
   database/
