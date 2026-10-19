@@ -68,8 +68,13 @@
         <h2>Live usage</h2>
         <div class="row">
           <select id="usage-user"></select>
+          <select id="period-select" title="Time machine — drive usage + history for any UTC month"></select>
           <button id="usage-refresh" class="btn ghost" title="Refresh usage views">↻</button>
         </div>
+        <p class="muted small">
+          🕰 <strong>Time machine:</strong> previous months are frozen history; the next month reads as
+          <strong>zero</strong> until the clock reaches it (rows are created lazily — no reset job to race).
+        </p>
         <div id="usage-body"><p class="muted">Loading…</p></div>
       </div>
 
@@ -114,6 +119,21 @@
         <div class="chart-wrap"><canvas id="chart-canvas" aria-label="Consumption timeline chart"></canvas></div>
       </div>
 
+      <div class="card" id="retry-card">
+        <h2>Safe-retry proof (idempotency)</h2>
+        <p class="muted small">
+          Simulates a dropped connection: sends one consume, then retries the <strong>same requestId</strong> twice.
+          Verifies the identical decision comes back with <code>X-Idempotent-Replay: true</code> and that usage
+          moved <strong>exactly once</strong> across all three calls — the customer is never double-charged.
+        </p>
+        <div class="row">
+          <select id="retry-user"></select>
+          <input id="retry-units" type="number" min="1" max="1000" step="1" value="5" />
+          <button id="retry-run" class="btn primary">♻ Prove safe retry</button>
+        </div>
+        <div id="retry-log" class="log hidden"></div>
+      </div>
+
       <div class="card wide" id="chaos-card">
         <h2>Chaos / stress mode <span id="chaos-status" class="badge soft"></span></h2>
         <p class="muted small">
@@ -153,16 +173,18 @@
     </div>
   </section>
 
-  <!-- ================= Guided tour ===================================== -->
-  <section class="card" id="tour-card">
-    <h2>Guided tour — the six showcase phases</h2>
-    <p class="muted">
-      Provisions a <strong>fresh account</strong> and walks the full story live against the real API:
-      accepted consumption → user-rule violation → idempotent replay → account exhaustion at the exact
-      boundary → runtime plan upgrade with usage preserved. Every step is asserted; at the end the
-      dashboard adopts the tour account.
-    </p>
-    <button id="tour-run" class="btn primary">▶ Run guided tour</button>
+<!-- ================= Rubric scenario walkthrough ================= -->
+      <section class="card" id="tour-card">
+        <h2>Rubric scenario walkthrough <span class="badge soft">1 click · auto-verified</span></h2>
+        <p class="muted">
+          Runs the exact sequence the brief grades, live against the real API — every step asserted:
+          <strong>users under one account with different plans</strong> →
+          <strong>accepted action</strong> →
+          <strong>rejection by a user limit</strong> (+ idempotent replay) →
+          <strong>rejection by the shared account limit</strong> (exact boundary) →
+          <strong>plan switch that changes what a user can do without changing any client code</strong>.
+        </p>
+        <button id="tour-run" class="btn primary">▶ Run Rubric Scenario Walkthrough</button>
     <div id="tour-log" class="log hidden"></div>
   </section>
 

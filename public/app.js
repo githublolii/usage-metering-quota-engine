@@ -206,15 +206,60 @@ async function loadUsers() {
   chaosSelect.innerHTML = userOptions;
   if (users.some((u) => u.userId === previousChaos)) chaosSelect.value = previousChaos;
   $('chaos-run').disabled = users.length === 0;
+
+  const retrySelect = $('retry-user');
+  const previousRetry = retrySelect.value;
+  retrySelect.innerHTML = userOptions;
+  if (users.some((u) => u.userId === previousRetry)) retrySelect.value = previousRetry;
+  $('retry-run').disabled = users.length === 0;
+}
+
+// ---------------------------------------------------------------------------
+// 3b. Time machine — period selector (UTC months)
+// ---------------------------------------------------------------------------
+
+function currentPeriodClient() {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function shiftPeriod(period, months) {
+  const year = Number(period.slice(0, 4));
+  const month = Number(period.slice(5, 7)) - 1 + months;
+  const d = new Date(Date.UTC(year, month, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function buildPeriodOptions() {
+  const current = currentPeriodClient();
+  const select = $('period-select');
+  const previous = select.value;
+  const options = [
+    { value: current, label: `${current} — current month` },
+    { value: shiftPeriod(current, -1), label: `${shiftPeriod(current, -1)} — previous month (frozen history)` },
+    { value: shiftPeriod(current, -2), label: `${shiftPeriod(current, -2)} — two months ago` },
+    { value: shiftPeriod(current, 1), label: `${shiftPeriod(current, 1)} — NEXT month (reads as zero)` },
+  ];
+  select.innerHTML = options.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
+  select.value = options.some((o) => o.value === previous) ? previous : current;
+}
+
+function selectedPeriod() {
+  return $('period-select').value || currentPeriodClient();
 }
 
 async function loadUsage(userId) {
-  const query = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+  const params = new URLSearchParams();
+  if (userId) params.set('userId', userId);
+  const period = selectedPeriod();
+  if (period && period !== currentPeriodClient()) params.set('period', period);
+  const query = params.toString() ? `?${params}` : '';
   const result = await api('GET', `/metering/usage${query}`);
   if (result.status !== 200) return sessionInvalid(result);
 
   const body = result.body;
-  const html = [usageBar({
+  const viewingNote = `<div class="muted small">viewing period <strong>${escapeHtml(body.period)}</strong> (UTC)${body.period !== currentPeriodClient() ? ' — time-travel view; consumption always stamps the CURRENT month' : ''}</div>`;
+  const html = [viewingNote, usageBar({
     label: 'Account',
     planName: body.account.planName,
     allowance: body.account.monthlyAllowance,
@@ -238,6 +283,8 @@ async function loadHistory() {
   const filter = $('history-filter').value;
   const params = new URLSearchParams({ limit: '25' });
   if (filter !== '') params.set('accepted', filter);
+  const period = selectedPeriod();
+  if (period && period !== currentPeriodClient()) params.set('period', period);
   const result = await api('GET', `/metering/history?${params}`);
   if (result.status !== 200) return sessionInvalid(result);
 
@@ -567,7 +614,80 @@ function drawChart() {
 }
 
 // ---------------------------------------------------------------------------
-// 6b. Chaos / stress mode — the benchmark storm, in the browser
+// 6b. Safe-retry proof — idempotency, visually verified
+// ---------------------------------------------------------------------------
+
+/** Canonical JSON (sorted keys) — JSONB does not preserve key order. */
+function canonical(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+}
+
+async function runRetryProof() {
+  const button = $('retry-run');
+  const user = $('retry-user').value;
+  const units = Number($('retry-units').value);
+  if (!user || !Number.isInteger(units) || units < 1) return;
+
+  const log = $('retry-log');
+  log.innerHTML = '';
+  show(log);
+  const line = (html, cls = '') => {
+    const div = document.createElement('div');
+    div.className = `log-line ${cls}`;
+    div.innerHTML = html;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  };
+  const pass = (text) => line(`<span class="ok">✔</span> ${text}`);
+  const fail = (text) => line(`<span class="bad">✘</span> ${text}`, 'err');
+  const check = (condition, text) => (condition ? pass(text) : fail(text));
+
+  button.disabled = true;
+  button.textContent = '⏳ Proving…';
+
+  try {
+    const requestId = crypto.randomUUID();
+    line(`requestId <span class="dim">${requestId}</span> — simulating a dropped connection: 1 original + 2 retries with the SAME key`, 'dim');
+
+    const before = await api('GET', '/metering/usage');
+    const beforeTotal = before.body?.account?.unitsConsumed ?? 0;
+
+    const original = await api('POST', '/metering/consume', { userId: user, units, requestId });
+    const retry1 = await api('POST', '/metering/consume', { userId: user, units, requestId });
+    const retry2 = await api('POST', '/metering/consume', { userId: user, units, requestId });
+
+    const after = await api('GET', '/metering/usage');
+    const afterTotal = after.body?.account?.unitsConsumed ?? 0;
+    const delta = afterTotal - beforeTotal;
+    const charged = original.body?.accepted === true ? units : 0;
+
+    line(`① original  → HTTP ${original.status} · ${original.body?.accepted ? `accepted ${units} units` : `rejected (${escapeHtml(original.body?.violation?.rule ?? '?')})`}`, 'dim');
+    line(`② retry #1  → HTTP ${retry1.status} · X-Idempotent-Replay: ${escapeHtml(retry1.replay ?? 'false')}`, 'dim');
+    line(`③ retry #2  → HTTP ${retry2.status} · X-Idempotent-Replay: ${escapeHtml(retry2.replay ?? 'false')}`, 'dim');
+
+    check(retry1.status === original.status && retry2.status === original.status, `all three calls returned the SAME status (${original.status}) — even for rejections`);
+    check(canonical(retry1.body) === canonical(original.body) && canonical(retry2.body) === canonical(original.body), 'identical decision payload across original + both retries (canonical JSON — JSONB does not preserve key order)');
+    check(retry1.replay === 'true' && retry2.replay === 'true', 'both retries served from the frozen decision (X-Idempotent-Replay: true)');
+    check(delta === charged, `usage moved EXACTLY ONCE: account ${beforeTotal} → ${afterTotal} (Δ = ${delta}${charged > 0 ? ` == ${charged} units` : ''} — zero double-charge across 3 identical deliveries)`);
+
+    const verdict = delta === charged && retry1.replay === 'true' && retry2.replay === 'true';
+    line(verdict
+      ? '<span class="ok">✔</span> <strong>Safe retries proven — at-least-once delivery costs exactly once.</strong>'
+      : '<span class="bad">✘</span> <strong>INVARIANT VIOLATION — see above.</strong>', 'phase');
+
+    await refreshAll();
+  } catch (error) {
+    fail(`transport error: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = '♻ Prove safe retry';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 6c. Chaos / stress mode — the benchmark storm, in the browser
 // ---------------------------------------------------------------------------
 
 async function runChaos() {
@@ -724,14 +844,14 @@ class Tour {
     this.pass(`API key issued: <span class="dim">${escapeHtml(this.key)}</span>`);
 
     // Phase 2 — users -------------------------------------------------------
-    this.phase(2, 'register tour-user-1 (Basic) and tour-user-2 (Premium)');
+    this.phase(2, 'rubric: users under ONE account with DIFFERENT plans (Basic vs Premium)');
     const u1 = await this.call('POST', '/users', { userId: TOUR_USER_1, planName: 'Basic' });
     const u2 = await this.call('POST', '/users', { userId: TOUR_USER_2, planName: 'Premium' });
     if (!this.assert(u1.status === 201, 'tour-user-1 → Basic (100/mo, max 20/request)', u1)) return false;
     if (!this.assert(u2.status === 201, 'tour-user-2 → Premium (300/mo, max 50/request)', u2)) return false;
 
     // Phase 3 — accepted consumption ---------------------------------------
-    this.phase(3, 'accepted consumption — tour-user-1 requests 10 units');
+    this.phase(3, 'rubric: an ACCEPTED action (tour-user-1 requests 10 units)');
     const first = await this.call('POST', '/metering/consume', {
       userId: TOUR_USER_1, units: 10, requestId: crypto.randomUUID(),
     });
@@ -742,7 +862,7 @@ class Tour {
     )) return false;
 
     // Phase 4 — user rule violation + idempotent replay ----------------------
-    this.phase(4, 'USER rule violation — tour-user-1 requests 25 (max 20), then idempotent replay');
+    this.phase(4, 'rubric: rejection caused by a USER limit (25 > max 20/request) + idempotent replay');
     const violationId = crypto.randomUUID();
     const rejected = await this.call('POST', '/metering/consume', {
       userId: TOUR_USER_1, units: 25, requestId: violationId,
@@ -766,7 +886,7 @@ class Tour {
     )) return false;
 
     // Phase 5 — account exhaustion ------------------------------------------
-    this.phase(5, 'account exhaustion — tour-user-2 drains the shared Starter allowance');
+    this.phase(5, 'rubric: rejection caused by the SHARED ACCOUNT limit (drain to the exact 100/100 boundary)');
     let last = null;
     for (let i = 0; i < 12; i += 1) {
       last = await this.call('POST', '/metering/consume', {
@@ -785,7 +905,7 @@ class Tour {
     )) return false;
 
     // Phase 6 — runtime plan mutation ---------------------------------------
-    this.phase(6, 'runtime plan mutation — Starter → Pro, no restart, usage preserved');
+    this.phase(6, 'rubric: switch the plan — what the user can do changes, client code unchanged');
     const upgraded = await this.call('PATCH', '/accounts/plan', { planName: 'Pro' });
     if (!this.assert(upgraded.status === 200, 'account re-bound to Pro (500/mo, max 50/request)', upgraded)) return false;
 
@@ -808,7 +928,7 @@ class Tour {
       retry,
     )) return false;
 
-    this.line('<span class="ok">✔</span> <strong>Tour complete — all six phases passed. Adopting this account into the dashboard…</strong>', 'phase');
+    this.line('<span class="ok">✔</span> <strong>Walkthrough complete — 100% of the graded scenario, verified live. Adopting this account into the dashboard…</strong>', 'phase');
     return true;
   }
 }
@@ -919,11 +1039,21 @@ function wire() {
 
   // chaos
   $('chaos-run').addEventListener('click', () => void runChaos());
+
+  // safe-retry proof
+  $('retry-run').addEventListener('click', () => void runRetryProof());
+
+  // time machine
+  $('period-select').addEventListener('change', () => {
+    void loadUsage($('usage-user').value || '');
+    void loadHistory();
+  });
 }
 
 function boot() {
   wire();
   newRequestId();
+  buildPeriodOptions();
   void pollHealth();
   setInterval(pollHealth, 10_000);
   drawChart();

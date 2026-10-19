@@ -1,17 +1,20 @@
 import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import swaggerUi from 'swagger-ui-express';
 import { corsOrigins, env } from './config/env.js';
-import { pool } from './database/connection.js';
+import { openApiSpec } from './docs/openapi.js';
 import { notFoundHandler, problemDetailsHandler } from './middleware/error.middleware.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
 import { accountsRouter } from './modules/accounts/accounts.routes.js';
 import { plansRouter } from './modules/plans/plans.routes.js';
 import { usersRouter } from './modules/users/users.routes.js';
 import { meteringRouter } from './modules/metering/metering.routes.js';
+import { pool } from './database/connection.js';
 
 /**
  * Express application assembly.
@@ -58,6 +61,25 @@ export function createApp() {
   );
   app.use(express.json({ limit: '64kb' }));
   app.use(express.static(resolvePublicDir(), { index: 'index.html' }));
+
+  // Interactive API explorer (Swagger UI). CSP is relaxed on this prefix
+  // only: Swagger UI initializes via an inline script; everything it loads
+  // afterwards is same-origin static assets.
+  app.use(
+    '/docs',
+    (_req: Request, res: Response, next: NextFunction) => {
+      res.removeHeader('Content-Security-Policy');
+      next();
+    },
+    swaggerUi.serve,
+    swaggerUi.setup(openApiSpec, {
+      customSiteTitle: 'Quota Engine — API Explorer',
+      customfavIcon: '/favicon.ico',
+    }),
+  );
+  app.get('/openapi.json', (_req: Request, res: Response) => {
+    res.status(200).json(openApiSpec);
+  });
 
   // Liveness + readiness in one: process up AND database reachable.
   app.get('/health', async (_req, res) => {
