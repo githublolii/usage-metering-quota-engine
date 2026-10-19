@@ -20,14 +20,14 @@ Every requirement, where it lives, and the one command that proves it:
 | Requirement | Implementation / Location | Verification Command |
 |---|---|---|
 | **Concurrency safety** — no over-allocation under parallel load | Pessimistic `FOR UPDATE` row locks + deterministic account→user lock order (`src/modules/metering/`) | `npm run test:concurrency` |
-| **Idempotent retries** — zero double-charge, even racing | `UNIQUE (account_id, request_id)` + pre-transaction replay fast path + 23505 abort-and-replay | `npm run test:idempotency` |
+| **Idempotent retries** — zero double-charge, even racing | `UNIQUE (account_id, request_id)` + replay fast path + 23505 abort-and-replay + **request fingerprinting: key reuse with a different payload is a 409** | `npm run test:idempotency` |
 | **Mid-month plan changes** — usage preserved, remaining clamps to 0 | Monotonic counters; `remaining = GREATEST(0, allowance − consumed)` derived, never stored | `npm run test:plan-change` |
 | **Tenant isolation + hashed API keys** | SHA-256 digests; every query scoped by `account_id`; foreign resources are indistinguishable from nonexistent | `npm run test:security` |
 | **Monthly reset / previous months** | Period is part of the row key — implicit UTC rollover, frozen history | `npm run test:monthly-reset` |
 | **Boundary rejection correctness** | Pure evaluator unit-tested at limit−1 / limit / limit+1 × all 4 rules | `npm run test:boundary` |
 | **Randomized property-based invariants** | fast-check oracle cross-checks: pure evaluator vs an independent model (1,000 runs) + live-API streams with mid-stream plan flips | `npm run test:property` |
 | **Performance report** | 500-way storms with SQL-verified invariants | `npm run load-test` → [`perf/results/`](./perf/results/) |
-| **The whole suite** | 125 tests, self-contained embedded PostgreSQL | `npm test` |
+| **The whole suite** | 127 tests, self-contained embedded PostgreSQL | `npm test` |
 
 ---
 
@@ -194,7 +194,7 @@ a structured `errors[]` array. Stack traces and SQL never leave the server.
 | `400` | `…errors:VALIDATION_FAILED` | Request violates a Zod DTO (with `errors[]`: path + message per issue), or the body is not valid JSON |
 | `401` | `…errors:UNAUTHENTICATED` | Missing or unknown API key |
 | `404` | `…errors:NOT_FOUND` | Resource unknown **within the authenticated tenant** (cross-tenant probes are indistinguishable from nonexistent — IDOR-safe) |
-| `409` | `…errors:CONFLICT` | Duplicate user, duplicate plan name, or wrong plan type binding |
+| `409` | `…errors:CONFLICT` | Duplicate user, duplicate plan name, wrong plan type binding — or **an idempotency key reused with a different request payload** (rule 3 defense) |
 | `422` | *(quota payload)* | **Not an error**: a well-formed request violating quota policy. The body is the business decision envelope above — a rejection is a *successful* decision, not a transport failure |
 | `500` | `…errors:INTERNAL` | Unexpected failure. Generic body; details only in server logs |
 
@@ -262,6 +262,97 @@ race against.
 filters on the authenticated `account_id`; caller-supplied `userId`s resolve
 through `UNIQUE (account_id, external_id)`, so a foreign tenant's user is
 indistinguishable from a nonexistent one.
+
+---
+
+## Security & Concurrency Audit — the 6 non-negotiable rules
+
+A line-by-line audit pass (Principal Backend Engineer / Security Auditor
+posture) over every request path. Two real vulnerabilities were found and
+fixed; two hardening gaps were closed. Each rule below names the mechanism,
+the proof, and the fix where one was needed.
+
+### Rule 1 — Zero-leak multi-tenancy & tenant isolation
+
+| Surface | Verdict |
+|---|---|
+| Every SQL query | Scoped by the authenticated `account_id` (never a client value); users resolve via `UNIQUE (account_id, external_id)`; plan CRUD matches `account_id = $caller AND is_predefined = FALSE` so foreign/predefined resources are indistinguishable from nonexistent (404) |
+| Enumeration posture | Cross-tenant probes return the same 404 body as nonexistent resources — the IDOR attack suite (`api.test.ts`, `plans-crud.test.ts`) asserts both the status and that nothing leaked |
+| API-key lookup | Single indexed SHA-256 digest comparison. Timing analysis is a non-oracle: the digest is fixed-length and unprefixed, so comparison time reveals only "hash exists / not" — which is the auth result itself (200 vs 401) |
+| CORS | Hardened this pass: header-key auth (never cookies) makes CSRF structurally impossible, and the dashboard is served same-origin — so **production now requires an explicit `CORS_ORIGIN` allow-list for cross-origin browser access** (dev still reflects) |
+| Fixed earlier in the audit series | `DELETE /plans/:id` previously leaked *global* binding counts (409) for predefined plans before checking ownership — ownership is now verified first, so predefined/foreign plans always 404 (commit `d4efe5b`) |
+
+### Rule 2 — Concurrency safety & no double-spending
+
+`BEGIN → FOR UPDATE(account row) → FOR UPDATE(user row) → pure evaluation →
+atomic increments → ledger insert → COMMIT`, with the account→user lock order
+held for the whole decision. Proven by induction over the lock funnel and by
+500-into-50 storms landing on exactly 100/100 (linearizability); deadlock-freedom
+follows from the total lock order (zero 40P01 across every suite).
+
+**Fixed this pass (TOCTOU):** the account's *plan binding* used to be taken
+from the auth middleware snapshot — captured milliseconds before the
+decision, so a concurrent plan switch could be evaluated against a stale
+binding. The transaction now re-reads the current binding **inside the held
+locks** (`loadAccountPlan(client, …)`), so a decision and the binding it used
+are atomic with respect to plan switches. `tests/concurrency/plan-mutation-race.test.ts`
+continues to pass unchanged.
+
+### Rule 3 — Idempotency & replay-attack defense
+
+`UNIQUE (account_id, request_id)` + the pre-transaction replay fast path +
+23505-abort-and-replay for racing duplicates (loser's increments roll back
+completely). **Fixed this pass:** an idempotency key reused with a *different
+payload* previously replayed the old decision silently — safe against
+double-charging, but ambiguous and a client-bug mask. Every decision now
+stores a `request_fingerprint` (SHA-256 of canonical `{accountId, userId,
+units}`; migration 003); **any replay surface (fast path, in-transaction
+re-check, 23505 loser) with a mismatching fingerprint returns 409
+`…errors:CONFLICT`** — one key maps to exactly one request (Stripe-style
+`idempotency_error`). Legacy rows (NULL fingerprint) keep replaying as before.
+Pinned by `tests/concurrency/idempotency-race.test.ts` → "idempotency
+conflict defense", including the 999-unit hijack attempt against a 2-unit
+decision (409, zero charge, and the same-payload retry still replays).
+
+### Rule 4 — Mid-month plan changes & downgrade clamping
+
+Counters are monotonic; `remaining = GREATEST(0, allowance − consumed)` is
+derived, never stored. A downgrade below current usage clamps remaining to 0
+until the next UTC month (history untouched); an upgrade restores capacity
+instantly; the account-binding TOCTOU fix above guarantees decisions evaluate
+the binding in force at decision time. Proven by
+`plan-mutation-race.test.ts` (conservation under mid-storm flips), the
+fast-check property streams (oracle cross-check), and boundary unit tests
+including `remaining === 0` fuzzing (`property.test.ts`).
+
+### Rule 5 — Input sanitization & defensive validation
+
+Strict Zod DTOs (unknown fields are 400s; `units` positive integer ≤ 1e9,
+`requestId` UUID, `period` regex-checked), 100% parameterized SQL (zero
+string interpolation), validation errors never echo raw input values, and
+server-side limits that keep values inside PostgreSQL `INT` arithmetic.
+
+**Fixed this pass (stored XSS — the critical find):** the dashboard's
+`escapeHtml` was a **no-op** — its entity map assigned `&`, `<`, `>`, `"` to
+*themselves* (only `'` was escaped), making every `innerHTML` sink
+(account names, userIds, plan names, error details — all attacker-controllable)
+injectable. Now a real entity map, applied to every interpolable sink,
+plus `usageBar`'s label (which received the raw client-supplied `userId`).
+Verified live: registering a user with
+`"><img src=x onerror=…><script>…</script>` renders as inert text — zero
+injected elements, zero script execution.
+
+### Rule 6 — Explainability & RFC 7807 errors
+
+One renderer (`problemDetailsHandler`), typed `DomainError`s carrying their
+own status, stable `urn:quota-engine:errors:*` type URNs, structured
+`errors[]` for 400s, and the deliberate 422-is-a-business-payload (not
+problem+json) contract. Rejections explain themselves: deterministic
+root-cause `violation` (source, rule, limit, requested, currentUsage,
+`remainingMonthly`) + human `reason`. Errors never leak stacks, SQL, or other
+tenants' data; the raw JSON inspector in the dashboard shows evaluators the
+exact wire format for every decision. This section (and the cheatsheet
+Q14–Q17) is the written defense of each choice.
 
 ---
 
@@ -345,7 +436,7 @@ this implementation resolves each, and why:
 | `npm run test:integration` | HTTP tests | The six-phase story end-to-end, idempotent replay of accepted *and* rejected decisions, plan mutation preserving usage, RFC 7807 shapes, cross-tenant IDOR attack suite, rotation atomicity, **custom-plan CRUD lifecycle, monthly reset & previous-month reads** |
 | `npm run test:concurrency` | Race suites | 250-into-50 quota storm, 40-way same-key race, 240-request mixed-user deadlock hunt, plan mutation racing live consumption — all asserted against SQL ground truth |
 | `npm run test:property` | Property-based (fast-check) | Thousands of generated cases: evaluator vs an independently written model, acceptance/conservation/precedence invariants, randomized live-API streams with mid-stream plan flips cross-checked against an oracle |
-| `npm test` | All of the above | 125 tests; every run boots a pristine embedded PostgreSQL |
+| `npm test` | All of the above | 127 tests; every run boots a pristine embedded PostgreSQL |
 
 CI with an external PostgreSQL: set `TEST_DATABASE_URL` and `npm test` uses
 it instead of booting the embedded one. A committed GitHub Actions workflow

@@ -343,6 +343,24 @@ export const openApiSpec = {
               },
             },
           },
+          409: {
+            description:
+              'Idempotency conflict — this requestId was already decided with a DIFFERENT request payload ' +
+              '(userId and/or units). One idempotency key maps to exactly one request; use a new key. ' +
+              'problem+json; nothing was charged.',
+            content: {
+              'application/problem+json': {
+                schema: { $ref: '#/components/schemas/Problem' },
+                example: {
+                  type: 'urn:quota-engine:errors:CONFLICT',
+                  title: 'Request conflicts with current state',
+                  status: 409,
+                  detail: 'This requestId was already used with a different request payload. An idempotency key maps to exactly one immutable decision — use a new requestId for a new request.',
+                  instance: '/metering/consume',
+                },
+              },
+            },
+          },
           400: { $ref: '#/components/responses/Problem' },
           401: { $ref: '#/components/responses/Problem' },
           404: { $ref: '#/components/responses/Problem' },

@@ -55,7 +55,13 @@ export function createApp() {
   app.use(helmet());
   app.use(
     cors({
-      origin: corsOrigins.length > 0 ? corsOrigins : true,
+      // CORS hardening (audit rule 1/5): auth is header-based (X-API-Key /
+      // Bearer — never cookies), so CSRF is structurally impossible and
+      // CORS is not a security boundary here; the dashboard is served
+      // same-origin by this very process. Outside production we reflect any
+      // origin for developer convenience; in PRODUCTION, cross-origin
+      // browser access requires an explicit CORS_ORIGIN allow-list.
+      origin: corsOrigins.length > 0 ? corsOrigins : env.NODE_ENV !== 'production',
       methods: ['GET', 'POST', 'PATCH'],
     }),
   );

@@ -335,3 +335,22 @@ export function generateApiKey(): ApiKey {
   const body = randomBytes(32).toString('base64url');
   return `mk_${body}` as ApiKey;
 }
+
+/**
+ * Fingerprint of a consume request for idempotency-conflict detection
+ * (replay-attack defense). SHA-256 over a CANONICAL JSON body with a
+ * fixed key order, so semantically identical payloads always hash equal.
+ * One idempotency key maps to exactly one payload: on replay, a fingerprint
+ * mismatch is a 409 — it never silently returns a decision for a request
+ * the client did not send.
+ *
+ * Pure + deterministic: unit-testable without I/O.
+ */
+export function requestFingerprint(
+  accountId: string,
+  userId: string,
+  units: number,
+): string {
+  const canonical = JSON.stringify({ accountId, userId, units });
+  return createHash('sha256').update(canonical, 'utf8').digest('hex');
+}

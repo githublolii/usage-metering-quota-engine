@@ -101,7 +101,7 @@ function usageBar({ label, planName, allowance, maxPerRequest, consumed }) {
   return `
     <div class="usage">
       <div class="usage-head">
-        <span class="who">${label} · ${escapeHtml(planName)}</span>
+        <span class="who">${escapeHtml(label)} · ${escapeHtml(planName)}</span>
         <span class="nums">${consumed.toLocaleString()} / ${allowance.toLocaleString()} · remaining ${remaining.toLocaleString()}</span>
       </div>
       <div class="bar"><div class="${cls}" style="width: ${pct.toFixed(1)}%"></div></div>
@@ -109,10 +109,23 @@ function usageBar({ label, planName, allowance, maxPerRequest, consumed }) {
     </div>`;
 }
 
+/**
+ * HTML-escape every interpolable sink. SECURITY-CRITICAL: all client- or
+ * server-supplied strings rendered via innerHTML MUST pass through here
+ * (account names, userIds, plan names, and error details are all
+ * attacker-controllable). The 2026-10 audit fixed a no-op version of this
+ * function that mapped & < > " to themselves — a stored-XSS vector.
+ */
+const HTML_ENTITIES = {
+  '&': String.fromCharCode(38) + 'amp;',
+  '<': String.fromCharCode(38) + 'lt;',
+  '>': String.fromCharCode(38) + 'gt;',
+  '"': String.fromCharCode(38) + 'quot;',
+  "'": String.fromCharCode(38) + '#39;',
+};
+
 function escapeHtml(text) {
-  return String(text).replace(/[&<>"']/g, (c) => ({
-    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
-  })[c] ?? c);
+  return String(text).replace(/[&<>"']/g, (c) => HTML_ENTITIES[c]);
 }
 
 // ---------------------------------------------------------------------------

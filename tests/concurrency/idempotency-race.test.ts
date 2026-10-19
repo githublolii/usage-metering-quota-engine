@@ -124,3 +124,82 @@ describe(`idempotency race — ${CONCURRENT_DUPLICATES} concurrent requests, one
     expect(usage.rows[0]?.units_consumed).toBe(UNITS + 3);
   }, 120_000);
 });
+
+describe('idempotency conflict defense (replay-attack guard)', () => {
+  it('409s when an already-used requestId arrives with a DIFFERENT payload', async () => {
+    const key = randomUUID();
+
+    // Original: 2 units, accepted.
+    const first = await consume(server.baseUrl, apiKey, {
+      userId: 'replayer',
+      units: 2,
+      requestId: key,
+    });
+    expect(first.status).toBe(200);
+
+    const accountBefore = await pool.query<{ units_consumed: number }>(
+      `SELECT units_consumed FROM monthly_usage
+        WHERE account_id = $1 AND user_id IS NULL AND period = $2`,
+      [accountId, period],
+    );
+    const before = accountBefore.rows[0]?.units_consumed ?? 0;
+
+    // Hijack attempt #1: same key, different units.
+    const hijackUnits = await consume(server.baseUrl, apiKey, {
+      userId: 'replayer',
+      units: 999,
+      requestId: key,
+    });
+    expect(hijackUnits.status).toBe(409);
+    expect(hijackUnits.replayed).toBe(false);
+    expect(hijackUnits.body.title).toBe('Request conflicts with current state');
+    expect(String(hijackUnits.body.detail)).toContain('different request payload');
+
+    // Hijack attempt #2: same key, different user.
+    await createUser(server.baseUrl, apiKey, 'hijacker', 'Premium');
+    const hijackUser = await consume(server.baseUrl, apiKey, {
+      userId: 'hijacker',
+      units: 2,
+      requestId: key,
+    });
+    expect(hijackUser.status).toBe(409);
+
+    // A same-payload retry still replays the original decision cleanly.
+    const legitRetry = await consume(server.baseUrl, apiKey, {
+      userId: 'replayer',
+      units: 2,
+      requestId: key,
+    });
+    expect(legitRetry.status).toBe(200);
+    expect(legitRetry.replayed).toBe(true);
+    expect(legitRetry.body).toEqual(first.body);
+
+    // And the hijack attempts charged nothing.
+    const accountAfter = await pool.query<{ units_consumed: number }>(
+      `SELECT units_consumed FROM monthly_usage
+        WHERE account_id = $1 AND user_id IS NULL AND period = $2`,
+      [accountId, period],
+    );
+    expect(accountAfter.rows[0]?.units_consumed).toBe(before);
+  }, 120_000);
+
+  it('409s for key reuse even against a REJECTED decision, and charges nothing either way', async () => {
+    // Get a rejection: hijacker is on Premium (300/mo) but the account pool
+    // may still have room — force a per-request violation instead: units
+    // beyond Premium's max 50/request while the key is fresh.
+    const key = randomUUID();
+    const rejected = await consume(server.baseUrl, apiKey, {
+      userId: 'hijacker',
+      units: 51, // > Premium max_units_per_request (50)
+      requestId: key,
+    });
+    expect(rejected.status).toBe(422);
+
+    const misuse = await consume(server.baseUrl, apiKey, {
+      userId: 'hijacker',
+      units: 1,
+      requestId: key,
+    });
+    expect(misuse.status).toBe(409);
+  }, 120_000);
+});

@@ -348,3 +348,24 @@ lives in `tests/unit/property.test.ts` (independent-model cross-check) and
 `tests/integration/property-stress.test.ts` (live-API oracle streams with
 mid-stream plan flips).
 
+### Q17. What happens if the same idempotency key arrives with a different payload?
+
+The audit-grade answer: **a 409, never a silent replay.** Every decision
+stores `request_fingerprint` — SHA-256 over the canonical
+`{accountId, userId, units}` — and every replay surface (pre-transaction
+fast path, in-transaction re-check, and the 23505 race loser) compares it
+before serving the stored decision. A mismatch means the client is reusing
+a key for a *different* request: that's either a client bug or a probing
+attempt, and returning the original decision would silently answer a
+question the client never asked (Stripe calls this `idempotency_error`).
+
+Note the security property it preserves: even before this guard, a
+mismatched replay never *re-charged* anything — the stored decision was
+served untouched, so double-spending was already impossible. The
+fingerprint turns "safe but ambiguous" into "safe and explicit."
+Legacy rows written before migration 003 (NULL fingerprint) keep replaying
+as before, so the guard is backward-compatible. Regression:
+`tests/concurrency/idempotency-race.test.ts` fires a 999-unit hijack
+against a 2-unit decision with the same key — 409, zero charge, and the
+same-payload retry still replays cleanly.
+

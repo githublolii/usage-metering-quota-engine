@@ -1,6 +1,10 @@
 import { isErr } from '../../domain/result.js';
 import { evaluateConsumption } from '../../domain/rules.js';
-import { NotFoundError, isUniqueViolation } from '../../domain/errors.js';
+import {
+  ConflictError,
+  NotFoundError,
+  isUniqueViolation,
+} from '../../domain/errors.js';
 import type {
   AccountId,
   AuthContext,
@@ -15,7 +19,11 @@ import type {
   UsageQueryDto,
   UserId,
 } from '../../domain/types.js';
-import { currentUtcPeriod, isValidPeriod } from '../../domain/types.js';
+import {
+  currentUtcPeriod,
+  isValidPeriod,
+  requestFingerprint,
+} from '../../domain/types.js';
 import { pool, withTransaction } from '../../database/connection.js';
 import type { SqlExecutor } from '../../database/executor.js';
 import * as meteringRepo from './metering.repository.js';
@@ -59,6 +67,13 @@ export async function consume(
   const { accountId } = auth;
   const period = currentUtcPeriod();
 
+  // Replay-conflict defense: fingerprint the canonical request payload.
+  // One idempotency key maps to exactly one request — a key reused with a
+  // DIFFERENT payload is a 409, never a silent replay of a decision the
+  // client did not send (Stripe-style idempotency_error). Legacy rows
+  // (fingerprint NULL) keep replaying as before.
+  const fingerprint = requestFingerprint(accountId, dto.userId, dto.units);
+
   // ⓪ REPLAY FAST PATH (outside any transaction). A committed decision is
   // IMMUTABLE, so a plain MVCC read is sufficient to serve a retry: it
   // never pays for BEGIN, the row locks, or the convoy, and — crucially —
@@ -73,11 +88,8 @@ export async function consume(
     dto.requestId,
   );
   if (committed !== null) {
-    return {
-      statusCode: committed.accepted ? 200 : 422,
-      replayed: true,
-      payload: committed.responsePayload,
-    };
+    assertFingerprintMatches(committed.fingerprint, fingerprint);
+    return replayOutcome(committed);
   }
 
   try {
@@ -91,11 +103,8 @@ export async function consume(
         dto.requestId,
       );
       if (stored !== null) {
-        return {
-          statusCode: stored.accepted ? 200 : 422,
-          replayed: true,
-          payload: stored.responsePayload,
-        };
+        assertFingerprintMatches(stored.fingerprint, fingerprint);
+        return replayOutcome(stored);
       }
 
       // 2. Tenant-scoped user resolution (IDOR guard).
@@ -123,9 +132,13 @@ export async function consume(
         period,
       );
 
-      // 5. Plan snapshots (bound rows, never deleted; read after the locks
-      //    so the decision uses the freshest committed plan state).
-      const accountPlan = await requirePlan(client, auth.planId);
+      // 5. Plan snapshots — RE-READ inside the locked transaction. The
+      //    account binding is NOT taken from the auth middleware snapshot
+      //    (auth ran milliseconds earlier): a concurrent plan switch must
+      //    not leave the decision evaluating a stale binding (TOCTOU fix).
+      //    Plans themselves are never deleted while bound, so a plain
+      //    read-committed read under the held locks is safe.
+      const accountPlan = await loadAccountPlan(client, accountId);
       const userPlan = await requirePlan(client, user.plan_id as PlanId);
 
       // 6. Pure evaluation.
@@ -164,6 +177,7 @@ export async function consume(
           rejectionSource: evaluation.error.violation.source,
           rejectionRule: evaluation.error.violation.rule,
           responsePayload: payload,
+          fingerprint,
         });
 
         return { statusCode: 422, replayed: false, payload };
@@ -210,13 +224,15 @@ export async function consume(
         rejectionSource: null,
         rejectionRule: null,
         responsePayload: payload,
+        fingerprint,
       });
 
       return { statusCode: 200, replayed: false, payload };
     });
   } catch (error) {
     // Lost the idempotency race: another worker committed this request id
-    // first. Return THEIR decision — identical semantics, zero double spend.
+    // first. Return THEIR decision — identical semantics, zero double spend —
+    // unless the racing payload differs, which is an idempotency conflict.
     if (isUniqueViolation(error, 'unique_request_idempotency')) {
       const stored = await meteringRepo.findConsumptionRecord(
         pool,
@@ -224,14 +240,37 @@ export async function consume(
         dto.requestId,
       );
       if (stored !== null) {
-        return {
-          statusCode: stored.accepted ? 200 : 422,
-          replayed: true,
-          payload: stored.responsePayload,
-        };
+        assertFingerprintMatches(stored.fingerprint, fingerprint);
+        return replayOutcome(stored);
       }
     }
     throw error;
+  }
+}
+
+/** Shared replay renderer: the frozen payload + the ORIGINAL status code. */
+function replayOutcome(stored: meteringRepo.StoredRecord): ConsumeOutcome {
+  return {
+    statusCode: stored.accepted ? 200 : 422,
+    replayed: true,
+    payload: stored.responsePayload,
+  };
+}
+
+/**
+ * Replay-conflict guard (audit rule 3): one idempotency key maps to exactly
+ * one request payload. Legacy rows (NULL fingerprint) are exempt.
+ */
+function assertFingerprintMatches(
+  stored: string | null,
+  computed: string,
+): void {
+  if (stored !== null && stored !== computed) {
+    throw new ConflictError(
+      'This requestId was already used with a different request payload. ' +
+        'An idempotency key maps to exactly one immutable decision — ' +
+        'use a new requestId for a new request.',
+    );
   }
 }
 

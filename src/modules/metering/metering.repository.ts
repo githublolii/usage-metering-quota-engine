@@ -26,6 +26,12 @@ import type { SqlExecutor } from '../../database/executor.js';
 export interface StoredRecord {
   readonly accepted: boolean;
   readonly responsePayload: ConsumeResponseBody;
+  /**
+   * SHA-256 of the canonical request payload. NULL on rows written before
+   * migration 003 (legacy replays keep the old behavior). A non-null
+   * mismatch on replay is an idempotency conflict (409) — see service.
+   */
+  readonly fingerprint: string | null;
 }
 
 export async function findConsumptionRecord(
@@ -36,8 +42,9 @@ export async function findConsumptionRecord(
   const result = await executor.query<{
     accepted: boolean;
     response_payload: ConsumeResponseBody;
+    request_fingerprint: string | null;
   }>(
-    `SELECT accepted, response_payload
+    `SELECT accepted, response_payload, request_fingerprint
        FROM consumption_records
       WHERE account_id = $1 AND request_id = $2`,
     [accountId, requestId],
@@ -45,7 +52,11 @@ export async function findConsumptionRecord(
   const row = result.rows[0];
   return row === undefined
     ? null
-    : { accepted: row.accepted, responsePayload: row.response_payload };
+    : {
+        accepted: row.accepted,
+        responsePayload: row.response_payload,
+        fingerprint: row.request_fingerprint,
+      };
 }
 
 export interface InsertRecordInput {
@@ -59,6 +70,8 @@ export interface InsertRecordInput {
   readonly rejectionSource: string | null;
   readonly rejectionRule: string | null;
   readonly responsePayload: ConsumeResponseBody;
+  /** SHA-256 of the canonical request payload (replay-conflict defense). */
+  readonly fingerprint: string | null;
 }
 
 export async function insertConsumptionRecord(
@@ -69,8 +82,8 @@ export async function insertConsumptionRecord(
     `INSERT INTO consumption_records
         (account_id, user_id, request_id, units_requested, accepted,
          rejection_reason, rejection_source, rejection_rule,
-         period, response_payload)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+         period, response_payload, request_fingerprint)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       input.accountId,
       input.userId,
@@ -82,6 +95,7 @@ export async function insertConsumptionRecord(
       input.rejectionRule,
       input.period,
       JSON.stringify(input.responsePayload),
+      input.fingerprint,
     ],
   );
 }
