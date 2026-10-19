@@ -387,8 +387,7 @@ function renderConsumeResult(result, replay) {
         <div class="cell"><div class="k">rule</div><div class="v">${escapeHtml(v.rule)}</div></div>
         <div class="cell"><div class="k">limit</div><div class="v">${v.limit.toLocaleString()}</div></div>
         <div class="cell"><div class="k">requested</div><div class="v">${v.requestedUnits.toLocaleString()}</div></div>
-        <div class="cell"><div class="k">current usage</div><div class="v">${v.currentUsage.toLocaleString()}</div></div>
-      </div>`;
+        <div class="cell"><div class="k">current usage</div><div class="v">${v.currentUsage.toLocaleString()}</div></div>        <div class=\"cell\"><div class=\"k\">remaining monthly</div><div class=\"v\">${(v.remainingMonthly ?? 0).toLocaleString()}</div></div>      </div>`;
     return;
   }
 

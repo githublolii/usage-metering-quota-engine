@@ -161,6 +161,7 @@ describe('evaluateConsumption — single-rule rejections', () => {
         limit: 100,
         requestedUnits: 80,
         currentUsage: 21,
+        remainingMonthly: 79,
       });
     }
   });

@@ -152,6 +152,7 @@ describe('consume — the dual-quota decision', () => {
       limit: 15,
       requestedUnits: 6,
       currentUsage: 10,
+      remainingMonthly: 5,
     });
   });
 
@@ -177,6 +178,7 @@ describe('consume — the dual-quota decision', () => {
       limit: 100,
       requestedUnits: 1,
       currentUsage: 100,
+      remainingMonthly: 0,
     });
   });
 

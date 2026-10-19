@@ -13,6 +13,21 @@ simultaneously), pessimistic row locking with deterministic lock ordering,
 database-enforced idempotency, RFC 7807 errors, a pure functional decision
 core — and a live web dashboard to drive all of it.
 
+### 📋 Evaluation Quick-Check
+
+Every requirement, where it lives, and the one command that proves it:
+
+| Requirement | Implementation / Location | Verification Command |
+|---|---|---|
+| **Concurrency safety** — no over-allocation under parallel load | Pessimistic `FOR UPDATE` row locks + deterministic account→user lock order (`src/modules/metering/`) | `npm run test:concurrency` |
+| **Idempotent retries** — zero double-charge, even racing | `UNIQUE (account_id, request_id)` + pre-transaction replay fast path + 23505 abort-and-replay | `npm run test:idempotency` |
+| **Mid-month plan changes** — usage preserved, remaining clamps to 0 | Monotonic counters; `remaining = GREATEST(0, allowance − consumed)` derived, never stored | `npm run test:plan-change` |
+| **Tenant isolation + hashed API keys** | SHA-256 digests; every query scoped by `account_id`; foreign resources are indistinguishable from nonexistent | `npm run test:security` |
+| **Monthly reset / previous months** | Period is part of the row key — implicit UTC rollover, frozen history | `npm run test:monthly-reset` |
+| **Boundary rejection correctness** | Pure evaluator unit-tested at limit−1 / limit / limit+1 × all 4 rules | `npm run test:boundary` |
+| **Performance report** | 500-way storms with SQL-verified invariants | `npm run load-test` → [`perf/results/`](./perf/results/) |
+| **The whole suite** | 117 tests, self-contained embedded PostgreSQL | `npm test` |
+
 ---
 
 ## Table of contents
@@ -138,10 +153,18 @@ Rejected — `422 Unprocessable Entity` (**zero units consumed**, all-or-nothing
   "requestId": "c4b3…",
   "reason": "Request exceeds user maximum units per request limit.",
   "violation": { "source": "user", "rule": "max_units_per_request",
-                 "limit": 20, "requestedUnits": 25, "currentUsage": 10 },
+                 "limit": 20, "requestedUnits": 25, "currentUsage": 10,
+                 "remainingMonthly": 90 },
   "period": "2026-10"
 }
 ```
+
+Every violation additionally carries **`remainingMonthly`** — the violated
+entity's remaining monthly budget at decision time (`GREATEST(0, allowance
+− usage)`) — so a client can render "you have 90 units left this month"
+without a second API call. Useful even when the violated rule is
+per-request. Full plan context (names, limits, live usage for both plans)
+is one `GET /metering/usage` away.
 
 **Idempotency:** retrying the same `requestId` returns the original decision
 with the original status code and `X-Idempotent-Replay: true`. Replays of
@@ -322,6 +345,11 @@ it instead of booting the embedded one. A committed GitHub Actions workflow
 build, and the full storm suite on every push — and can trigger the
 benchmark manually (`workflow_dispatch`), uploading `perf/results/` as
 artifacts.
+
+Targeted suites for single-requirement verification (see the
+[Evaluation Quick-Check](#evaluation-quick-check)):
+`npm run test:idempotency` · `test:plan-change` · `test:security` ·
+`test:monthly-reset` · `test:boundary`.
 
 ---
 

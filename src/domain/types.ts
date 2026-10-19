@@ -89,6 +89,13 @@ export interface Violation {
   readonly limit: number;
   readonly requestedUnits: number;
   readonly currentUsage: number;
+  /**
+   * Remaining budget under the VIOLATED entity's monthly allowance at
+   * decision time — GREATEST(0, monthlyAllowance − currentUsage). Useful
+   * even when the violated rule is per-request ("you may not send 25 at
+   * once, and you have 90 left this month"). Always ≥ 0.
+   */
+  readonly remainingMonthly: number;
 }
 
 export type ConsumeResponseBody =

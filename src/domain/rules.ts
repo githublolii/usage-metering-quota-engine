@@ -108,14 +108,14 @@ export function evaluateConsumption(
   // 1. user.max_units_per_request
   if (requestedUnits > userPlan.maxUnitsPerRequest) {
     return err(
-      rejection('user', 'max_units_per_request', userPlan.maxUnitsPerRequest, requestedUnits, userUsage.unitsConsumed),
+      rejection('user', 'max_units_per_request', userPlan.maxUnitsPerRequest, requestedUnits, userUsage.unitsConsumed, remainingUnits(userPlan.monthlyAllowance, userUsage.unitsConsumed)),
     );
   }
 
   // 2. account.max_units_per_request
   if (requestedUnits > accountPlan.maxUnitsPerRequest) {
     return err(
-      rejection('account', 'max_units_per_request', accountPlan.maxUnitsPerRequest, requestedUnits, accountUsage.unitsConsumed),
+      rejection('account', 'max_units_per_request', accountPlan.maxUnitsPerRequest, requestedUnits, accountUsage.unitsConsumed, remainingUnits(accountPlan.monthlyAllowance, accountUsage.unitsConsumed)),
     );
   }
 
@@ -126,7 +126,7 @@ export function evaluateConsumption(
   );
   if (requestedUnits > userRemaining) {
     return err(
-      rejection('user', 'monthly_allowance', userPlan.monthlyAllowance, requestedUnits, userUsage.unitsConsumed),
+      rejection('user', 'monthly_allowance', userPlan.monthlyAllowance, requestedUnits, userUsage.unitsConsumed, userRemaining),
     );
   }
 
@@ -137,7 +137,7 @@ export function evaluateConsumption(
   );
   if (requestedUnits > accountRemaining) {
     return err(
-      rejection('account', 'monthly_allowance', accountPlan.monthlyAllowance, requestedUnits, accountUsage.unitsConsumed),
+      rejection('account', 'monthly_allowance', accountPlan.monthlyAllowance, requestedUnits, accountUsage.unitsConsumed, accountRemaining),
     );
   }
 
@@ -159,6 +159,7 @@ function rejection(
   limit: number,
   requestedUnits: number,
   currentUsage: number,
+  remainingMonthly: number,
 ): RejectedEvaluation {
   const reason =
     rule === 'max_units_per_request'
@@ -172,7 +173,7 @@ function rejection(
   return {
     accepted: false,
     reason,
-    violation: { source, rule, limit, requestedUnits, currentUsage },
+    violation: { source, rule, limit, requestedUnits, currentUsage, remainingMonthly },
   };
 }
 

@@ -16,7 +16,6 @@
     "migrate": "tsx src/database/migrator.ts up",
     "migrate:status": "tsx src/database/migrator.ts status",
     "seed": "tsx scripts/seed.ts",
-    "dev": "tsx watch src/server.ts",
     "dev:db": "tsx scripts/dev-db.ts",
     "serve": "tsx scripts/serve.ts",
     "demo": "tsx src/client/demo.ts",
@@ -24,7 +23,12 @@
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
-    "test:concurrency": "vitest run tests/concurrency"
+    "test:concurrency": "vitest run tests/concurrency",
+    "test:idempotency": "vitest run tests/concurrency/idempotency-race.test.ts",
+    "test:plan-change": "vitest run tests/concurrency/plan-mutation-race.test.ts",
+    "test:security": "vitest run tests/integration/api.test.ts tests/integration/auth-and-validation.test.ts tests/integration/plans-crud.test.ts",
+    "test:monthly-reset": "vitest run tests/integration/monthly-reset.test.ts",
+    "test:boundary": "vitest run tests/unit/rules.test.ts"
   },
   "keywords": [
     "metering",
