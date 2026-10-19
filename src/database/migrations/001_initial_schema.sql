@@ -4,9 +4,9 @@
 -- Boyce-Codd Normal Form (BCNF) schema. See docs/ARCHITECTURE.md for the
 -- full functional-dependency analysis proving BCNF/3NF compliance.
 --
--- Deviations from the reference DDL (documented & justified):
+-- Notes on the schema:
 --   1. `created_at/updated_at` default to plain `NOW()` on TIMESTAMPTZ
---      columns. The reference DDL used `NOW() AT TIME ZONE 'UTC'`, which
+--      columns. An expression like `NOW() AT TIME ZONE 'UTC'`, which
 --      produces a *naive* timestamp; storing it back into a TIMESTAMPTZ
 --      column re-interprets it in the session timezone, silently shifting
 --      audit timestamps on hosts not running UTC. `NOW()` alone stores the

@@ -1,9 +1,9 @@
 -- ===========================================================================
 -- 002_indexes.sql — performance composite indexes
 --
--- Index consolidation note (interview-worthy deviation from reference DDL):
+-- Index consolidation:
 --
---   The reference DDL listed BOTH:
+--   A first draft of this schema listed BOTH:
 --     * UNIQUE constraints  unique_usage_period (account_id, user_id, period)
 --       and unique_user_per_account (account_id, external_id)
 --   and

@@ -49,7 +49,7 @@ const inputArb: fc.Arbitrary<EvaluateConsumptionInput> = fc.record({
  *   2. account.max_units_per_request
  *   3. user.monthly_allowance
  *   4. account.monthly_allowance
- * Written from the SPEC, not from the implementation, on purpose.
+ * Written from the documented contract, not from the implementation, on purpose.
  */
 function modelEvaluate(input: EvaluateConsumptionInput) {
   const { requestedUnits, accountPlan, userPlan, accountUsage, userUsage } =

@@ -125,9 +125,9 @@ Windows PowerShell note: set env vars inline with
 
 `results/` holds the outputs of the last run on the development machine
 (Node 24 / Windows / embedded PostgreSQL 17.5). They are committed on
-purpose — the brief asks for performance results *and* the tools that
-produce them. Re-running `npm run load-test` overwrites both files with
-fresh, locally-truthful numbers for your hardware.
+purpose: results and the tools that produce them belong together.
+Re-running `npm run load-test` overwrites both files with fresh,
+locally-truthful numbers for your hardware.
 
 The CI regression equivalents of these invariants live in
 [`tests/concurrency/`](../tests/concurrency/) and run as part of `npm test`.

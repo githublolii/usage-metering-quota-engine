@@ -1,19 +1,18 @@
 -- ===========================================================================
--- 003_request_fingerprint.sql — idempotency replay-attack defense
+-- 003_request_fingerprint.sql — idempotency replay safety
 --
--- AUDIT FINDING (rule 3: Idempotency & Replay Attack Defense):
---   Replaying an already-decided (account_id, request_id) is correct — but
---   a key reused with a DIFFERENT payload (userId/units) silently returned
---   the ORIGINAL decision, which is ambiguous for callers and masks client
---   bugs (Stripe calls this idempotency_error). 
+-- Replaying an already-decided (account_id, request_id) is correct — but a
+-- key reused with a DIFFERENT payload (userId/units) must not silently
+-- return the ORIGINAL decision: that is ambiguous for callers and masks
+-- client bugs (Stripe calls this idempotency_error).
 --
--- HARDENING:
+-- Design:
 --   Store a SHA-256 fingerprint of the canonical request payload alongside
 --   the decision. On any replay (fast path, in-transaction re-check, or the
 --   23505 race loser) the service compares fingerprints: a mismatch is a
---   409 CONFLICT problem+json — "one idempotency key maps to exactly one
---   request". The double-spend guarantee is untouched (mismatched replays
---   were never re-charged before either); this removes the ambiguity.
+--   409 CONFLICT problem+json — one idempotency key maps to exactly one
+--   request. The double-spend guarantee is unaffected either way (a
+--   mismatched replay was never re-charged); this removes the ambiguity.
 --
 --   The column is NULLABLE: rows written before this migration (fingerprint
 --   NULL) keep replaying as before — legacy decisions never 409.

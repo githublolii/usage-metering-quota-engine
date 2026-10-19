@@ -265,25 +265,24 @@ inserter commits or aborts). Two concerns:
 
 ---
 
-## 8. Engineering gotchas discovered while proving this
+## 8. Implementation notes
 
-Documented here because they are exactly the kind of detail interviewers
-probe for:
+Three details that are easy to get wrong:
 
 1. **JSONB does not preserve key order.** A freshly-built accepted payload
    and its replayed twin (parsed back from `response_payload JSONB`) are
    *semantically identical* but not byte-identical. The replay-storm
-   invariant therefore compares canonicalized JSON — a naive
-   `JSON.stringify` comparison produces false mismatches.
-2. **The load generator itself was the first "bug."** Firing 500 truly
+   invariant therefore compares canonicalized JSON — a byte-for-byte
+   comparison would report false mismatches.
+2. **The load generator is part of the measurement.** Firing 500 truly
    simultaneous `fetch()` calls opens 500 TCP sockets at once; OS accept
    queues on loopback start refusing connections at ~250 (client-side
    `ECONNREFUSED`, no server log). The benchmark and test harness use a
    bounded `undici` Agent (200 sockets, all requests logically in flight)
-   — the same discipline real load tools (`autocannon -c`) apply. Lesson:
-   before blaming the server, prove the *client* isn't the failure.
+   — the same discipline real load tools (`autocannon -c`) apply. Prove
+   the client is not the bottleneck before drawing conclusions about the
+   server.
 3. **Postgres session timezone.** The pool forces `options: '-c timezone=UTC'`
    so `NOW()`-based period math can never drift with the host clock
-   (the reference DDL's `NOW() AT TIME ZONE 'UTC'` returns a *naive*
-   timestamp and is a subtle bug — see the cheatsheet's "Deviations"
-   section).
+   (`NOW() AT TIME ZONE 'UTC'` returns a *naive* timestamp — a subtle bug
+   on non-UTC hosts; see `001_initial_schema.sql`).

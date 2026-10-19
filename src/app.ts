@@ -55,7 +55,7 @@ export function createApp() {
   app.use(helmet());
   app.use(
     cors({
-      // CORS hardening (audit rule 1/5): auth is header-based (X-API-Key /
+      // CORS hardening: auth is header-based (X-API-Key /
       // Bearer — never cookies), so CSRF is structurally impossible and
       // CORS is not a security boundary here; the dashboard is served
       // same-origin by this very process. Outside production we reflect any

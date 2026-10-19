@@ -11,7 +11,7 @@ import { pool } from '../../src/database/connection.js';
 import { currentUtcPeriod } from '../../src/domain/types.js';
 
 /**
- * THE race-condition regression (spec §6, automated for CI).
+ * THE race-condition regression (automated for CI).
  *
  * Setup: Starter account (100 units/month, max 10/request). A `drainer`
  * user consumes exactly 50 units up front, leaving 50 units. Then 250

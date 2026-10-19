@@ -12,9 +12,9 @@ import { pool } from '../../src/database/connection.js';
 import { currentUtcPeriod } from '../../src/domain/types.js';
 
 /**
- * Rules changing WHILE requests arrive concurrently — the brief's exact
- * high-stakes scenario: "usage totals and decisions remain correct as
- * rules change and requests arrive concurrently."
+ * Rules changing WHILE requests arrive concurrently: usage totals and
+ * decisions must remain correct as rules change and requests arrive
+ * concurrently.
  *
  * Storm design: an account on Pro (500/mo, max 50/request) with one user
  * fires 60 concurrent 5-unit consumptions (total demand 300). MID-STORM

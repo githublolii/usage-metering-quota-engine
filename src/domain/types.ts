@@ -82,7 +82,7 @@ export interface PlanUsageView {
   readonly remaining: number;
 }
 
-/** RFC 7807-shaped structured violation (see spec §1.5). */
+/** RFC 7807-shaped structured violation (the consume rejection envelope). */
 export interface Violation {
   readonly source: RejectionSource;
   readonly rule: RejectionRule;

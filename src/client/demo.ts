@@ -5,10 +5,10 @@ import { createInterface } from 'node:readline/promises';
 import pc from 'picocolors';
 
 /**
- * Interactive CLI simulation client (spec §5).
+ * Interactive CLI simulation client.
  *
- * A guided, self-verifying walkthrough of the engine's six showcase
- * phases against a LIVE server:
+ * A guided, self-verifying walkthrough of the engine's six phases
+ * against a LIVE server:
  *
  *   Phase 1  Provision an account, receive the API key (shown ONCE).
  *   Phase 2  Register user-1 (Basic USER plan) and user-2 (Premium USER plan).

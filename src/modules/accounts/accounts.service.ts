@@ -111,7 +111,7 @@ export async function rotateApiKey(accountId: AccountId): Promise<ApiKey> {
 }
 
 /**
- * Runtime plan mutation (spec §5 Phase 6): rebind the account to any
+ * Runtime plan mutation: rebind the account to any
  * ACCOUNT-type plan the caller may use — predefined or custom — without
  * restarting anything. Usage counters are untouched (monotonic), so the
  * new, larger allowance applies to *remaining* budget immediately.

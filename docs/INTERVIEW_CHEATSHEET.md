@@ -1,11 +1,11 @@
 # Interview Cheatsheet — Syllabus Term Map & Defense Answers
 
-> Direct map from the Boot.dev syllabus (see `lessons_&_concepts_taken.txt`)
-> to the concrete lines of code that implement each concept, followed by
-> the senior-level defense answers for the questions examiners actually ask.
+> A direct map from the Boot.dev syllabus (see `lessons_&_concepts_taken.txt`)
+> to the code that implements each concept, followed by defense answers for
+> the questions interviewers actually ask.
 >
-> Commandments for this repo: every claim below is verifiable — the file
-> paths point at the implementation, the tests point at the guarantee.
+> Every claim below is verifiable — the file paths point at the
+> implementation, the tests point at the guarantee.
 
 ---
 
@@ -46,7 +46,7 @@
 
 ---
 
-## Part 2 — Defense answers (the questions examiners ask)
+## Part 2 — Defense answers (the questions interviewers ask)
 
 ### Q1. Why PostgreSQL pessimistic locks (`FOR UPDATE`) instead of Redis distributed locks?
 
@@ -79,7 +79,7 @@
    with *no* benefit, since we already require Postgres for every
    decision.
 
-**Concession to make (interviewers love this):** Redis *is* the right
+**The concession worth stating:** Redis *is* the right
 tool for **rate limiting** (requests/second, approximate, lossy-tolerant)
 and for read-heavy caching of the plan catalog. It is the wrong tool for
 **billing-grade metering**, where every unit must be accounted exactly
@@ -227,14 +227,14 @@ zero rows via the ensure-upsert, and old months' rows simply stop being
 touched. No cron job means no "reset job vs. in-flight request" race —
 the classic bug in balance-based designs.
 
-### Q12. Deliberate deviations from the reference DDL (know these cold)
+### Q12. Schema choices that differ from an obvious first draft
 
 1. `DEFAULT NOW()` instead of `NOW() AT TIME ZONE 'UTC'`: the latter
    returns a *naive* timestamp; storing it into TIMESTAMPTZ re-interprets
    it in the session zone — silent drift on non-UTC hosts. `NOW()` on a
    TIMESTAMPTZ column stores the correct instant anywhere, and the pool
    forces `timezone=UTC` for deterministic period math.
-2. Dropped the duplicate `idx_usage_lookup` /
+2. No duplicate `idx_usage_lookup` /
    `idx_user_external_account` indexes: UNIQUE constraints already create
    identical btree indexes; duplication doubles write amplification for
    zero read benefit (002_indexes.sql header).
@@ -248,7 +248,7 @@ the classic bug in balance-based designs.
 
 ### Q13. What would you do differently at 10× scale?
 
-Own it as a roadmap, not a confession: (1) shard hot accounts by
+The honest roadmap: (1) shard hot accounts by
 `account_id` (Citus-style) since serialization is per-account anyway;
 (2) add a Redis-backed *rate limiter* in front (different concern, Q6);
 (3) move history reads to a read replica with a `pg_logical` lag budget;
@@ -259,9 +259,9 @@ blocking-correct.
 
 ### Q14. Map the canonical transaction skeleton to this codebase, line by line.
 
-Graders often bring a reference skeleton (`account_usage`, `user_usage`,
-`request_logs`). Here is the exact equivalence — same locking discipline,
-different (unified) physical layout:
+A common reference design uses separate `account_usage` / `user_usage`
+tables plus a `request_logs` ledger. The equivalence with this codebase —
+same locking discipline, unified physical layout:
 
 | Skeleton | This implementation | Why equivalent (or better) |
 |---|---|---|
@@ -350,7 +350,7 @@ mid-stream plan flips).
 
 ### Q17. What happens if the same idempotency key arrives with a different payload?
 
-The audit-grade answer: **a 409, never a silent replay.** Every decision
+The strict answer: **a 409, never a silent replay.** Every decision
 stores `request_fingerprint` — SHA-256 over the canonical
 `{accountId, userId, units}` — and every replay surface (pre-transaction
 fast path, in-transaction re-check, and the 23505 race loser) compares it

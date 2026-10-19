@@ -11,7 +11,7 @@
  *   3. workspace loaders (account / plans / users / usage / history)
  *   4. provisioning + key lifecycle
  *   5. consume flow (fresh + idempotent replay)
- *   6. guided tour (the six showcase phases, asserted live)
+ *   6. guided scenario walkthrough (six phases, asserted live)
  *   7. boot & event wiring
  */
 'use strict';
@@ -113,8 +113,8 @@ function usageBar({ label, planName, allowance, maxPerRequest, consumed }) {
  * HTML-escape every interpolable sink. SECURITY-CRITICAL: all client- or
  * server-supplied strings rendered via innerHTML MUST pass through here
  * (account names, userIds, plan names, and error details are all
- * attacker-controllable). The 2026-10 audit fixed a no-op version of this
- * function that mapped & < > " to themselves — a stored-XSS vector.
+ * attacker-controllable). The map must contain real entities — a version
+ * that passes characters through unchanged would be a stored-XSS vector.
  */
 const HTML_ENTITIES = {
   '&': String.fromCharCode(38) + 'amp;',
@@ -414,7 +414,7 @@ function renderConsumeResult(result, replay) {
   if (result.status === 401) return sessionInvalid(result);
 
   // Raw JSON inspector — show the exact payload for every outcome, so the
-  // wire format is always one click away (defense-ready).
+  // wire format is always one click away.
   updateJsonViewer(body === null ? `HTTP ${result.status} (non-JSON response)` : JSON.stringify(body, null, 2));
 
   if (body && body.accepted === true) {
@@ -800,7 +800,7 @@ async function runChaos() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Guided tour — the six showcase phases (fresh account, fully asserted)
+// 7. Guided scenario walkthrough (fresh account, fully asserted)
 // ---------------------------------------------------------------------------
 
 const TOUR_USER_1 = 'tour-user-1';
@@ -857,14 +857,14 @@ class Tour {
     this.pass(`API key issued: <span class="dim">${escapeHtml(this.key)}</span>`);
 
     // Phase 2 — users -------------------------------------------------------
-    this.phase(2, 'rubric: users under ONE account with DIFFERENT plans (Basic vs Premium)');
+    this.phase(2, 'users under one account with different plans (Basic vs Premium)');
     const u1 = await this.call('POST', '/users', { userId: TOUR_USER_1, planName: 'Basic' });
     const u2 = await this.call('POST', '/users', { userId: TOUR_USER_2, planName: 'Premium' });
     if (!this.assert(u1.status === 201, 'tour-user-1 → Basic (100/mo, max 20/request)', u1)) return false;
     if (!this.assert(u2.status === 201, 'tour-user-2 → Premium (300/mo, max 50/request)', u2)) return false;
 
     // Phase 3 — accepted consumption ---------------------------------------
-    this.phase(3, 'rubric: an ACCEPTED action (tour-user-1 requests 10 units)');
+    this.phase(3, 'an accepted action (tour-user-1 requests 10 units)');
     const first = await this.call('POST', '/metering/consume', {
       userId: TOUR_USER_1, units: 10, requestId: crypto.randomUUID(),
     });
@@ -875,7 +875,7 @@ class Tour {
     )) return false;
 
     // Phase 4 — user rule violation + idempotent replay ----------------------
-    this.phase(4, 'rubric: rejection caused by a USER limit (25 > max 20/request) + idempotent replay');
+    this.phase(4, 'rejection by a user limit (25 > max 20/request), plus idempotent replay');
     const violationId = crypto.randomUUID();
     const rejected = await this.call('POST', '/metering/consume', {
       userId: TOUR_USER_1, units: 25, requestId: violationId,
@@ -899,7 +899,7 @@ class Tour {
     )) return false;
 
     // Phase 5 — account exhaustion ------------------------------------------
-    this.phase(5, 'rubric: rejection caused by the SHARED ACCOUNT limit (drain to the exact 100/100 boundary)');
+    this.phase(5, 'rejection by the shared account limit (drain to the exact 100/100 boundary)');
     let last = null;
     for (let i = 0; i < 12; i += 1) {
       last = await this.call('POST', '/metering/consume', {
@@ -918,7 +918,7 @@ class Tour {
     )) return false;
 
     // Phase 6 — runtime plan mutation ---------------------------------------
-    this.phase(6, 'rubric: switch the plan — what the user can do changes, client code unchanged');
+    this.phase(6, 'switch the plan — what the user can do changes, client code unchanged');
     const upgraded = await this.call('PATCH', '/accounts/plan', { planName: 'Pro' });
     if (!this.assert(upgraded.status === 200, 'account re-bound to Pro (500/mo, max 50/request)', upgraded)) return false;
 
@@ -941,7 +941,7 @@ class Tour {
       retry,
     )) return false;
 
-    this.line('<span class="ok">✔</span> <strong>Walkthrough complete — 100% of the graded scenario, verified live. Adopting this account into the dashboard…</strong>', 'phase');
+    this.line('<span class="ok">✔</span> <strong>Walkthrough complete — the full scenario, verified live. Adopting this account into the dashboard…</strong>', 'phase');
     return true;
   }
 }
@@ -966,7 +966,7 @@ async function runTour() {
     tourLog.appendChild(div);
   } finally {
     button.disabled = false;
-    button.textContent = '▶ Run guided tour';
+    button.textContent = '▶ Run scenario walkthrough';
   }
 }
 

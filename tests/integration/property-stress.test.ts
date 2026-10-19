@@ -19,7 +19,7 @@ import { currentUtcPeriod } from '../../src/domain/types.js';
  * random unit sizes interleaved with MID-STREAM PLAN DOWNGRADES/UPGRADES —
  * plays them against the LIVE HTTP API, and cross-checks every response
  * (and the final database counters) against a model of the quota contract
- * written directly from the spec, not from the implementation.
+ * written directly from the documented contract, not from the implementation.
  *
  * Invariants that must hold for EVERY generated stream:
  *   1. Every HTTP decision matches the oracle's prediction — decision

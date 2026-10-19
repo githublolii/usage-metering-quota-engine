@@ -28,7 +28,7 @@ export const openApiSpec = {
     { name: 'Users', description: 'Tenant-scoped user registration + runtime plan mutation' },
     { name: 'Metering', description: 'The quota decision, usage views, audit history' },
   ],
-  'x-rubric-notes': {
+  'x-design-notes': {
     'status codes':
       '200 accepted decision (or idempotent replay) · 201 created · ' +
       '400 validation problem+json · 401 unauthenticated · 404 unknown within ' +

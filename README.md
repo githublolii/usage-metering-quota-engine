@@ -1,23 +1,25 @@
 # Usage Metering & Quota Engine
 
-![Node](https://img.shields.io/badge/Node-%E2%89%A520.11-339933) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-4169E1) ![Tests](https://img.shields.io/badge/tests-125%20passing-2EA44F) ![License](https://img.shields.io/badge/license-MIT-blue)
+![Node](https://img.shields.io/badge/Node-%E2%89%A520.11-339933) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-4169E1) ![Tests](https://img.shields.io/badge/tests-127%20passing-2EA44F) ![License](https://img.shields.io/badge/license-MIT-blue)
 
-Mission-critical, multi-tenant **usage metering and quota engine** in TypeScript + PostgreSQL.
+A multi-tenant **usage metering and quota engine** in TypeScript + PostgreSQL.
 
 ```
 Zero quota overruns · Zero deadlocks · Zero double-spending · Exactly-once decisions
 ```
 
-A dual-quota consumption model (the **account plan** and the **user plan** apply
-simultaneously), pessimistic row locking with deterministic lock ordering,
-database-enforced idempotency, RFC 7807 errors, a pure functional decision
-core — and a live web dashboard to drive all of it.
+The **account plan** and the **user plan** apply simultaneously to every
+consumption request. Decisions run under pessimistic row locks in a
+deterministic lock order, idempotency is enforced by the database, usage is
+tracked as monotonic counters with implicit UTC monthly rollover, errors are
+RFC 7807 `problem+json`, and the quota policy lives in a pure, exhaustively
+tested function. A web dashboard drives all of it.
 
-### 📋 Evaluation Quick-Check
+### Requirement verification
 
-Every requirement, where it lives, and the one command that proves it:
+Every guarantee in this repository has a one-command reproduction:
 
-| Requirement | Implementation / Location | Verification Command |
+| Requirement | Implementation | Verification |
 |---|---|---|
 | **Concurrency safety** — no over-allocation under parallel load | Pessimistic `FOR UPDATE` row locks + deterministic account→user lock order (`src/modules/metering/`) | `npm run test:concurrency` |
 | **Idempotent retries** — zero double-charge, even racing | `UNIQUE (account_id, request_id)` + replay fast path + 23505 abort-and-replay + **request fingerprinting: key reuse with a different payload is a 409** | `npm run test:idempotency` |
@@ -39,14 +41,14 @@ Every requirement, where it lives, and the one command that proves it:
 4. [Error standards (RFC 7807)](#error-standards-rfc-7807)
 5. [How a consume decision executes](#how-a-consume-decision-executes)
 6. [The four invariants](#the-four-invariants)
-7. [Performance results](#performance-results)
-8. [Product assumptions & open decisions](#product-assumptions--open-decisions)
-9. [Testing](#testing)
-10. [Project structure](#project-structure)
-11. [Configuration](#configuration)
-12. [Design decisions & trade-offs](#design-decisions--trade-offs)
-13. [Production deployment](#production-deployment)
-14. [Deliverables checklist](#deliverables-checklist)
+7. [Security & correctness model](#security--correctness-model)
+8. [Performance results](#performance-results)
+9. [Decisions on open questions](#decisions-on-open-questions)
+10. [Testing](#testing)
+11. [Project structure](#project-structure)
+12. [Configuration](#configuration)
+13. [Design decisions & trade-offs](#design-decisions--trade-offs)
+14. [Production deployment](#production-deployment)
 15. [Documentation map](#documentation-map)
 16. [License](#license)
 
@@ -67,7 +69,7 @@ npm run serve
 # The six-phase guided walkthrough in your terminal (self-hosting, same trick)
 npm run demo
 
-# The full test suite — 125 tests, each run boots a pristine embedded PostgreSQL
+# The full test suite — 127 tests, each run boots a pristine embedded PostgreSQL
 npm test
 
 # The concurrency benchmark — 500-way storms, invariants verified against SQL
@@ -82,7 +84,7 @@ Prefer your own PostgreSQL (or Docker Compose)? See
 ## The web dashboard
 
 `npm run serve` → **http://localhost:3000** — a dependency-free dark-themed
-SaaS dashboard (vanilla HTML/CSS/JS, CSP-safe) driving the real API:
+dashboard (vanilla HTML/CSS/JS, CSP-safe) driving the real API:
 
 | Panel | Capabilities |
 |---|---|
@@ -93,10 +95,10 @@ SaaS dashboard (vanilla HTML/CSS/JS, CSP-safe) driving the real API:
 | **Consume console** | Real decisions with visible `requestId`, **Replay last** (idempotency demo), **⧉ Copy as cURL** (reproduce any request in a terminal), and a **raw JSON inspector** showing the exact payload the API returned |
 | **Consumption timeline** | Canvas chart: per-request units (accepted/rejected) + cumulative accepted line — no chart libraries |
 | **Chaos / stress mode** *(directly under the chart — run a storm, watch the timeline fill in)* | Fire up to 500 concurrent requests at the live engine from the browser; invariants (zero transport errors, conservation, no overrun, exact budget exhaustion) verified against database totals |
-| **Safe-retry proof** | One click sends 1 original + 2 identical retries (simulated dropped connection); verifies same status, canonical-identical payload, `X-Idempotent-Replay: true`, and usage moved **exactly once** — zero double-charge |
-| **Time machine** | UTC month selector on Live usage + History: previous months read as frozen history, the next month reads as **zero** — monthly rollover proven without touching the system clock |
+| **Safe-retry proof** | One click sends 1 original + 2 identical retries (simulated dropped connection); verifies same status, identical payload, `X-Idempotent-Replay: true`, and usage moved **exactly once** — zero double-charge |
+| **Time machine** | UTC month selector on Live usage + History: previous months read as frozen history, the next month reads as **zero** — monthly rollover demonstrable without touching the system clock |
 | **History** | Paginated audit trail with accepted/rejected chips and rule columns |
-| **Rubric scenario walkthrough** | One click provisions a fresh account and runs the exact graded sequence — different-plan users → accepted action → user-limit rejection → shared-account-limit rejection → plan switch — every step auto-asserted, then adopts the account |
+| **Guided scenario walkthrough** | One click provisions a fresh account and runs the complete product story — different-plan users → accepted action → user-limit rejection → shared-account-limit rejection → plan switch — every step auto-asserted, then adopts the account |
 | **Interactive API explorer** | Swagger UI at **`/docs`** over a hand-authored OpenAPI 3 spec (all 15 operations, schemas + examples); raw spec at `/openapi.json` |
 
 ---
@@ -178,8 +180,10 @@ with the original status code and `X-Idempotent-Replay: true`. Replays of
 committed decisions are served by a **pre-transaction fast path** — a plain
 indexed read, no `BEGIN`, no locks, no convoy. If the retry *races* the
 original, the loser aborts on `UNIQUE (account_id, request_id)` with its
-counter increments fully rolled back. One key ⇒ one immutable decision: for
-a *new* decision after a plan upgrade, use a *new* `requestId`.
+counter increments fully rolled back. Reusing a key with a **different
+payload** (`userId` or `units`) is rejected with **409** — one idempotency
+key maps to exactly one request. For a *new* decision after a plan upgrade,
+use a *new* `requestId`.
 
 ---
 
@@ -194,7 +198,7 @@ a structured `errors[]` array. Stack traces and SQL never leave the server.
 | `400` | `…errors:VALIDATION_FAILED` | Request violates a Zod DTO (with `errors[]`: path + message per issue), or the body is not valid JSON |
 | `401` | `…errors:UNAUTHENTICATED` | Missing or unknown API key |
 | `404` | `…errors:NOT_FOUND` | Resource unknown **within the authenticated tenant** (cross-tenant probes are indistinguishable from nonexistent — IDOR-safe) |
-| `409` | `…errors:CONFLICT` | Duplicate user, duplicate plan name, wrong plan type binding — or **an idempotency key reused with a different request payload** (rule 3 defense) |
+| `409` | `…errors:CONFLICT` | Duplicate user, duplicate plan name, wrong plan type binding — or an idempotency key reused with a different request payload |
 | `422` | *(quota payload)* | **Not an error**: a well-formed request violating quota policy. The body is the business decision envelope above — a rejection is a *successful* decision, not a transport failure |
 | `500` | `…errors:INTERNAL` | Unexpected failure. Generic body; details only in server logs |
 
@@ -224,7 +228,7 @@ sequenceDiagram
     S->>DB: BEGIN
     S->>DB: SELECT … FOR UPDATE (account row)      ➊ lock #1
     S->>DB: SELECT … FOR UPDATE (user row)          ➋ lock #2
-    S->S: evaluateConsumption() — pure, zero I/O
+    S->>S: evaluateConsumption() — pure, zero I/O
     alt rejected
         S->>DB: INSERT rejection record · COMMIT
         S-->>C: 422 {accepted:false, reason, violation, period}
@@ -248,7 +252,7 @@ total lock ordering, and the exactly-once replay mechanics — are in
 |---|---|---|
 | **No quota overruns** under any parallelism | `SELECT … FOR UPDATE` on the account row held for the whole decision; pure evaluator checks all 4 rules before any write | Induction proof + 500-into-50 storm lands exactly 100/100 |
 | **No deadlocks** | Deterministic lock order (account → user); the wait-for graph is acyclic by construction | Zero 5xx across 240-request mixed-user storms |
-| **Exactly-once (idempotency)** | `UNIQUE (account_id, request_id)`; racing losers abort on SQLSTATE 23505 with increments rolled back; replays served by the fast path | 500 callers, one key → 1 record, 5 units, 500 identical payloads |
+| **Exactly-once (idempotency)** | `UNIQUE (account_id, request_id)`; racing losers abort on SQLSTATE 23505 with increments rolled back; replays served by the fast path; fingerprint mismatch on replay is a 409 | 500 callers, one key → 1 record, 5 units, 500 identical payloads |
 | **Atomic all-or-nothing decisions** | One transaction per decision: counters + audit row commit together or not at all | Crash-failure behavior table in the concurrency doc |
 
 **Monotonic counters, not balances.** `units_consumed` only ever increases
@@ -258,101 +262,87 @@ next month, history untouched. Upgrade ⇒ capacity returns instantly. Month
 rollover is implicit (fresh `YYYY-MM` row on first touch) — no reset job to
 race against.
 
-**Multi-tenant isolation.** Keys stored only as SHA-256 digests; every query
-filters on the authenticated `account_id`; caller-supplied `userId`s resolve
-through `UNIQUE (account_id, external_id)`, so a foreign tenant's user is
-indistinguishable from a nonexistent one.
-
 ---
 
-## Security & Concurrency Audit — the 6 non-negotiable rules
+## Security & correctness model
 
-A line-by-line audit pass (Principal Backend Engineer / Security Auditor
-posture) over every request path. Two real vulnerabilities were found and
-fixed; two hardening gaps were closed. Each rule below names the mechanism,
-the proof, and the fix where one was needed.
+Every request path follows the same six disciplines. Each subsection names
+the mechanism, where it lives, and how it is verified.
 
-### Rule 1 — Zero-leak multi-tenancy & tenant isolation
+### Tenant isolation
 
-| Surface | Verdict |
-|---|---|
-| Every SQL query | Scoped by the authenticated `account_id` (never a client value); users resolve via `UNIQUE (account_id, external_id)`; plan CRUD matches `account_id = $caller AND is_predefined = FALSE` so foreign/predefined resources are indistinguishable from nonexistent (404) |
-| Enumeration posture | Cross-tenant probes return the same 404 body as nonexistent resources — the IDOR attack suite (`api.test.ts`, `plans-crud.test.ts`) asserts both the status and that nothing leaked |
-| API-key lookup | Single indexed SHA-256 digest comparison. Timing analysis is a non-oracle: the digest is fixed-length and unprefixed, so comparison time reveals only "hash exists / not" — which is the auth result itself (200 vs 401) |
-| CORS | Hardened this pass: header-key auth (never cookies) makes CSRF structurally impossible, and the dashboard is served same-origin — so **production now requires an explicit `CORS_ORIGIN` allow-list for cross-origin browser access** (dev still reflects) |
-| Fixed earlier in the audit series | `DELETE /plans/:id` previously leaked *global* binding counts (409) for predefined plans before checking ownership — ownership is now verified first, so predefined/foreign plans always 404 (commit `d4efe5b`) |
+- Every SQL query filters on the authenticated `account_id` — never a
+  client-supplied value. Users resolve through `UNIQUE (account_id,
+  external_id)`; plan mutations match
+  `account_id = $caller AND is_predefined = FALSE`, so predefined catalog
+  plans and other tenants' plans return the same 404 as nonexistent
+  resources — enumeration is useless.
+- API keys are 256-bit random secrets stored **only** as SHA-256 digests.
+  The lookup is a single indexed comparison of a fixed-length, unprefixed
+  digest; comparison timing reveals nothing beyond the authentication
+  result itself.
+- Auth is header-based (`X-API-Key` / `Bearer`), never cookies, so CSRF is
+  structurally impossible; the dashboard is served same-origin. In
+  production, cross-origin browser access requires an explicit
+  `CORS_ORIGIN` allow-list.
+- Verified by the IDOR attack suite (`tests/integration/api.test.ts`,
+  `plans-crud.test.ts`): cross-tenant consume, usage lookups, plan
+  binding, and plan deletion all fail closed with 404 and leak nothing.
 
-### Rule 2 — Concurrency safety & no double-spending
+### Concurrency & double-spend prevention
 
 `BEGIN → FOR UPDATE(account row) → FOR UPDATE(user row) → pure evaluation →
-atomic increments → ledger insert → COMMIT`, with the account→user lock order
-held for the whole decision. Proven by induction over the lock funnel and by
-500-into-50 storms landing on exactly 100/100 (linearizability); deadlock-freedom
-follows from the total lock order (zero 40P01 across every suite).
+atomic increments → ledger insert → COMMIT`, with the account→user lock
+order held for the whole decision. Proven by induction over the lock funnel
+and by 500-into-50 storms landing on exactly 100/100 (linearizability);
+deadlock-freedom follows from the total lock order (zero SQLSTATE 40P01
+across every suite). The transaction re-reads the account's **current**
+plan binding inside the held locks — a decision and the binding it
+evaluated are atomic with respect to concurrent plan switches.
 
-**Fixed this pass (TOCTOU):** the account's *plan binding* used to be taken
-from the auth middleware snapshot — captured milliseconds before the
-decision, so a concurrent plan switch could be evaluated against a stale
-binding. The transaction now re-reads the current binding **inside the held
-locks** (`loadAccountPlan(client, …)`), so a decision and the binding it used
-are atomic with respect to plan switches. `tests/concurrency/plan-mutation-race.test.ts`
-continues to pass unchanged.
+### Idempotency & replay safety
 
-### Rule 3 — Idempotency & replay-attack defense
+`UNIQUE (account_id, request_id)` is the single source of truth: racing
+duplicates serialize on the account row lock, the loser's INSERT aborts on
+SQLSTATE 23505, and its counter increments roll back completely — the
+quota moves exactly once. Committed decisions are immutable, so replays
+take a pre-transaction fast path (one indexed read, no locks). Every
+decision stores a `request_fingerprint` (SHA-256 of the canonical
+`{accountId, userId, units}`); **any replay with a mismatching fingerprint
+is a 409**, so one idempotency key maps to exactly one request. Rows
+written before migration 003 carry a NULL fingerprint and keep replaying.
+Verified by `tests/concurrency/idempotency-race.test.ts`: a 999-unit
+hijack attempt against a 2-unit decision returns 409 with zero charge,
+while the same-payload retry still replays.
 
-`UNIQUE (account_id, request_id)` + the pre-transaction replay fast path +
-23505-abort-and-replay for racing duplicates (loser's increments roll back
-completely). **Fixed this pass:** an idempotency key reused with a *different
-payload* previously replayed the old decision silently — safe against
-double-charging, but ambiguous and a client-bug mask. Every decision now
-stores a `request_fingerprint` (SHA-256 of canonical `{accountId, userId,
-units}`; migration 003); **any replay surface (fast path, in-transaction
-re-check, 23505 loser) with a mismatching fingerprint returns 409
-`…errors:CONFLICT`** — one key maps to exactly one request (Stripe-style
-`idempotency_error`). Legacy rows (NULL fingerprint) keep replaying as before.
-Pinned by `tests/concurrency/idempotency-race.test.ts` → "idempotency
-conflict defense", including the 999-unit hijack attempt against a 2-unit
-decision (409, zero charge, and the same-payload retry still replays).
+### Plan changes mid-month
 
-### Rule 4 — Mid-month plan changes & downgrade clamping
+Counters are monotonic and `remaining` is derived, so a downgrade below
+current usage clamps remaining to 0 until the next UTC month without
+touching history, and an upgrade restores capacity instantly. Combined with
+the in-transaction binding read above, rules can change while requests are
+in flight without corrupting totals. Verified by
+`tests/concurrency/plan-mutation-race.test.ts` (conservation under
+mid-storm plan flips) and the fast-check property streams.
 
-Counters are monotonic; `remaining = GREATEST(0, allowance − consumed)` is
-derived, never stored. A downgrade below current usage clamps remaining to 0
-until the next UTC month (history untouched); an upgrade restores capacity
-instantly; the account-binding TOCTOU fix above guarantees decisions evaluate
-the binding in force at decision time. Proven by
-`plan-mutation-race.test.ts` (conservation under mid-storm flips), the
-fast-check property streams (oracle cross-check), and boundary unit tests
-including `remaining === 0` fuzzing (`property.test.ts`).
+### Input validation & sanitization
 
-### Rule 5 — Input sanitization & defensive validation
+Strict Zod DTOs at every boundary — unknown fields are 400s, `units` must
+be a positive integer ≤ 1e9, `requestId` a UUID, `period` regex-checked.
+100% parameterized SQL (zero string interpolation). Validation errors never
+echo raw input values. All dashboard rendering routes through a real HTML
+entity map, so attacker-controlled strings (account names, userIds, plan
+names, error details) render as text, never markup.
 
-Strict Zod DTOs (unknown fields are 400s; `units` positive integer ≤ 1e9,
-`requestId` UUID, `period` regex-checked), 100% parameterized SQL (zero
-string interpolation), validation errors never echo raw input values, and
-server-side limits that keep values inside PostgreSQL `INT` arithmetic.
-
-**Fixed this pass (stored XSS — the critical find):** the dashboard's
-`escapeHtml` was a **no-op** — its entity map assigned `&`, `<`, `>`, `"` to
-*themselves* (only `'` was escaped), making every `innerHTML` sink
-(account names, userIds, plan names, error details — all attacker-controllable)
-injectable. Now a real entity map, applied to every interpolable sink,
-plus `usageBar`'s label (which received the raw client-supplied `userId`).
-Verified live: registering a user with
-`"><img src=x onerror=…><script>…</script>` renders as inert text — zero
-injected elements, zero script execution.
-
-### Rule 6 — Explainability & RFC 7807 errors
+### Errors & explainability (RFC 7807)
 
 One renderer (`problemDetailsHandler`), typed `DomainError`s carrying their
 own status, stable `urn:quota-engine:errors:*` type URNs, structured
 `errors[]` for 400s, and the deliberate 422-is-a-business-payload (not
 problem+json) contract. Rejections explain themselves: deterministic
 root-cause `violation` (source, rule, limit, requested, currentUsage,
-`remainingMonthly`) + human `reason`. Errors never leak stacks, SQL, or other
-tenants' data; the raw JSON inspector in the dashboard shows evaluators the
-exact wire format for every decision. This section (and the cheatsheet
-Q14–Q17) is the written defense of each choice.
+`remainingMonthly`) plus a human `reason`. Errors never leak stacks, SQL,
+or other tenants' data.
 
 ---
 
@@ -381,36 +371,35 @@ xychart-beta
     bar "replay storm" [585, 912, 1027, 1065]
 ```
 
-### What we learned (and why the numbers look like this)
+### Interpreting the numbers
 
-1. **The tail latency IS the correctness mechanism.** Under the storm, p99 ≈
+1. **The tail latency is the correctness mechanism.** Under the storm, p99 ≈
    2.5 s — but that time is *queue position*, not work: every contender for
    the same account waits its turn on the row lock, each turn costing ~3–5 ms
    of actual SQL. The convoy is what makes over-consumption mathematically
-   impossible; a system with a flat p99 here would be a system racing its own
-   quota checks.
-2. **The first "benchmark failure" was the client, not the server.** Firing
-   500 truly simultaneous `fetch()` calls opens 500 TCP sockets at once; OS
-   loopback accept-queues refuse bursts around ~230 with client-side
-   `ECONNREFUSED`. The harness now uses a bounded `undici` Agent (200
-   sockets, all requests logically in flight) — the same discipline real
-   tools like `autocannon -c` apply. Lesson: prove the load generator isn't
-   the bottleneck before blaming the engine.
+   impossible; a system with a flat p99 here would be racing its own quota
+   checks.
+2. **The client is part of the measurement.** Firing 500 truly simultaneous
+   `fetch()` calls opens 500 TCP sockets at once; OS loopback accept-queues
+   refuse bursts around ~230 with client-side `ECONNREFUSED`. The harness
+   uses a bounded `undici` Agent (200 sockets, all requests logically in
+   flight) — the same discipline real tools like `autocannon -c` apply — so
+   the numbers measure the engine, not the TCP stack.
 3. **Replays are nearly free.** Committed-decision retries take the
    pre-transaction fast path — one indexed MVCC read, no `BEGIN`, no locks —
    which is why the replay storm sustains ~2.5× the throughput of the
    write storm with a far flatter tail.
 4. **JSONB does not preserve key order.** A replayed payload and a fresh
    one are semantically identical but not byte-identical; the invariant
-   checks canonicalize JSON before comparing. This gotcha would have
-   produced false double-spend alarms in a naive verifier.
+   checks canonicalize JSON before comparing. A byte-for-byte comparison
+   would report false double-spend alarms.
 
 ---
 
-## Product assumptions & open decisions
+## Decisions on open questions
 
-The brief intentionally leaves several decisions open. Here is exactly how
-this implementation resolves each, and why:
+The requirements leave several decisions open. These are the choices this
+engine makes, and the reasoning behind each:
 
 | Open question | Decision | Rationale |
 |---|---|---|
@@ -432,8 +421,8 @@ this implementation resolves each, and why:
 
 | Command | Suite | What it proves |
 |---|---|---|
-| `npm run test:unit` | 60 pure-domain tests | Every limit boundary (limit−1 / limit / limit+1 × 4 rules), downgrade semantics, deterministic precedence, programmer-error contracts, Result monad, Zod DTOs |
-| `npm run test:integration` | HTTP tests | The six-phase story end-to-end, idempotent replay of accepted *and* rejected decisions, plan mutation preserving usage, RFC 7807 shapes, cross-tenant IDOR attack suite, rotation atomicity, **custom-plan CRUD lifecycle, monthly reset & previous-month reads** |
+| `npm run test:unit` | Pure-domain tests | Every limit boundary (limit−1 / limit / limit+1 × 4 rules), downgrade semantics, deterministic precedence, programmer-error contracts, Result monad, Zod DTOs |
+| `npm run test:integration` | HTTP tests | The six-phase story end-to-end, idempotent replay of accepted *and* rejected decisions, plan mutation preserving usage, RFC 7807 shapes, cross-tenant IDOR attack suite, rotation atomicity, custom-plan CRUD lifecycle, monthly reset & previous-month reads |
 | `npm run test:concurrency` | Race suites | 250-into-50 quota storm, 40-way same-key race, 240-request mixed-user deadlock hunt, plan mutation racing live consumption — all asserted against SQL ground truth |
 | `npm run test:property` | Property-based (fast-check) | Thousands of generated cases: evaluator vs an independently written model, acceptance/conservation/precedence invariants, randomized live-API streams with mid-stream plan flips cross-checked against an oracle |
 | `npm test` | All of the above | 127 tests; every run boots a pristine embedded PostgreSQL |
@@ -446,7 +435,7 @@ benchmark manually (`workflow_dispatch`), uploading `perf/results/` as
 artifacts.
 
 Targeted suites for single-requirement verification (see the
-[Evaluation Quick-Check](#evaluation-quick-check)):
+[requirement verification table](#requirement-verification)):
 `npm run test:idempotency` · `test:plan-change` · `test:security` ·
 `test:monthly-reset` · `test:boundary`.
 
@@ -461,12 +450,13 @@ src/
   database/
     connection.ts                pg.Pool + withTransaction (guaranteed BEGIN/COMMIT/ROLLBACK)
     migrator.ts                  checksummed, advisory-locked SQL migration engine
-    migrations/                 001_initial_schema.sql · 002_indexes.sql
+    migrations/                  001_initial_schema · 002_indexes · 003_request_fingerprint
   domain/                        PURE CORE — zero I/O, zero framework imports
     types.ts                     branded types · Zod DTOs · API-key crypto
     result.ts                    Result<T,E> monad
     rules.ts                     evaluateConsumption() — the entire quota policy
     errors.ts                    RFC 7807 error taxonomy
+  docs/openapi.ts                hand-authored OpenAPI 3 specification
   middleware/                    auth (SHA-256) · validate (Zod) · error (problem+json)
   modules/
     accounts/ plans/ users/ metering/    routes → controller → service → repository
@@ -482,7 +472,7 @@ scripts/
 tests/
   unit/ · integration/ · concurrency/ · helpers/        (+ fast-check property suites: tests/unit/property.test.ts, tests/integration/property-stress.test.ts)
 docs/
-  ARCHITECTURE.md · CONCURRENCY_AND_LOCKING.md · INTERVIEW_CHEATSHEET.md · BENCHMARK_REPORT.md
+  ARCHITECTURE.md · CONCURRENCY_AND_LOCKING.md · INTERVIEW_CHEATSHEET.md · BENCHMARK_REPORT.md · PUBLISHING.md
 ```
 
 Dependencies point strictly inward: the `src/domain/` core imports nothing
@@ -504,16 +494,16 @@ start). See [`.env.example`](.env.example).
 | `DB_POOL_MAX` | `20` | pg pool size — see pool rationale in the benchmark report |
 | `DB_IDLE_TIMEOUT_MS` | `30000` | Idle client eviction |
 | `DB_CONNECTION_TIMEOUT_MS` | `5000` | Pool checkout timeout — fails fast instead of queueing forever |
-| `CORS_ORIGIN` | *(reflect)* | Comma-separated allow-list |
+| `CORS_ORIGIN` | *(reflect in non-production)* | Comma-separated allow-list; required for cross-origin browser access in production |
 | `LOG_LEVEL` | `info` | `debug` · `info` · `warn` · `error` · `silent` |
 
 ---
 
 ## Design decisions & trade-offs
 
-The full defense dossier — syllabus term map plus Q&A for Redis-vs-Postgres
-locking, the BCNF proof, monotonic counters, status-code semantics, and the
-line-by-line mapping to the canonical transaction skeleton — lives in
+The full Q&A — Redis-vs-Postgres locking, the BCNF proof, monotonic
+counters, status-code semantics, append-only ledger vs mutable counter, and
+the mapping to a canonical transaction skeleton — lives in
 [`docs/INTERVIEW_CHEATSHEET.md`](docs/INTERVIEW_CHEATSHEET.md). Highlights:
 
 - **Postgres row locks over Redis distributed locks** — the lock lives in the
@@ -522,7 +512,13 @@ line-by-line mapping to the canonical transaction skeleton — lives in
   a different problem.)
 - **Pessimistic over optimistic concurrency** — retry storms at the exact hot
   spot would livelock; row-lock queues are scheduled, bounded, and correct.
-- **BCNF schema** with justified, documented deviations (JSONB payload
+- **Append-only ledger + materialized snapshot** — `consumption_records` is
+  the immutable ledger (one row per request, accepted and rejected, with the
+  frozen response payload); `monthly_usage` is the O(1) balance anchor
+  maintained atomically in the same transaction. Point-in-time
+  reconstruction is always provable: Σ accepted-record units equals the
+  snapshot counter.
+- **BCNF schema** with justified, documented choices (JSONB payload
   duplication for byte-faithful replay; constraint-backed indexes never
   duplicated — see `002_indexes.sql`).
 - **SHA-256 (not bcrypt) for API keys** — 256-bit random secrets make offline
@@ -557,19 +553,6 @@ makes that safe).
 
 ---
 
-## Deliverables checklist
-
-| Deliverable | Where it lives | Status |
-|---|---|---|
-| `docker compose up --build` spins up Postgres + API, runs migrations/seeds, serves the UI | `docker-compose.yml` + `Dockerfile` + `docker-entrypoint.sh` (migrate → seed → serve on boot; Postgres health-gated) | ✔ |
-| Automated tests: API keys, monthly reset, boundary rejection, account isolation | `tests/integration/auth-and-validation.test.ts` (keys + rotation), `tests/integration/monthly-reset.test.ts`, `tests/unit/rules.test.ts` (limit−1/limit/limit+1), `tests/integration/api.test.ts` + `plans-crud.test.ts` (IDOR suite) | ✔ |
-| Load / performance test committed to the repo | `perf/load-test.ts` (+ [`perf/README.md`](perf/README.md): commands, deps, knobs) | ✔ |
-| README: performance results with numbers/chart + lessons learned | [Performance results](#performance-results) + committed artifacts in [`perf/results/`](./perf/results/) | ✔ |
-| README: product assumptions (custom plans, timezone, 402/422 vs 429, …) | [Product assumptions & open decisions](#product-assumptions--open-decisions) | ✔ |
-| Public GitHub repo | Git-initialized with everything committed; publish via [`docs/PUBLISHING.md`](docs/PUBLISHING.md) | ✔ |
-
----
-
 ## Documentation map
 
 | Document | Contents |
@@ -577,7 +560,8 @@ makes that safe).
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Visual flows, ER model, request lifecycles, indexing rationale |
 | [`docs/CONCURRENCY_AND_LOCKING.md`](docs/CONCURRENCY_AND_LOCKING.md) | The zero-overrun and deadlock-freedom proofs; replay fast path |
 | [`docs/BENCHMARK_REPORT.md`](docs/BENCHMARK_REPORT.md) | Measured p50/p95/p99, storm arithmetic, pool sizing (canonical copy in `perf/results/`) |
-| [`docs/INTERVIEW_CHEATSHEET.md`](docs/INTERVIEW_CHEATSHEET.md) | Syllabus term map + defense answers |
+| [`docs/INTERVIEW_CHEATSHEET.md`](docs/INTERVIEW_CHEATSHEET.md) | Concept-to-implementation map + design Q&A |
+| [`docs/PUBLISHING.md`](docs/PUBLISHING.md) | Creating the GitHub repository and pushing |
 | [`perf/README.md`](perf/README.md) | Performance reproduction: commands, dependencies, configuration |
 
 ---

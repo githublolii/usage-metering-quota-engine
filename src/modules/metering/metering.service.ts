@@ -33,7 +33,7 @@ import { findUserRowByExternalId } from '../users/users.repository.js';
 /**
  * Metering service — the quota engine's serialization point.
  *
- * TRANSACTION SHAPE (spec §4, with the lock-order contract):
+ * TRANSACTION SHAPE (with the lock-order contract):
  *
  *   ⓪ Replay fast path (NO transaction): if (account_id, request_id) is
  *      already committed, return the frozen payload immediately — a retry
@@ -258,7 +258,7 @@ function replayOutcome(stored: meteringRepo.StoredRecord): ConsumeOutcome {
 }
 
 /**
- * Replay-conflict guard (audit rule 3): one idempotency key maps to exactly
+ * Replay-conflict guard: one idempotency key maps to exactly
  * one request payload. Legacy rows (NULL fingerprint) are exempt.
  */
 function assertFingerprintMatches(

@@ -317,7 +317,7 @@ asserted by the concurrency suites and the property-based stress). Reads
 at O(1); full history at O(log n) via the audit indexes.
 
 **Why no `version` column (optimistic concurrency) on the snapshot?** A
-guide-style balances table pairs the ledger with a version counter for OCC
+common design pairs the balances table with a version counter for OCC
 retries. This engine deliberately uses pessimistic `FOR UPDATE` row locks
 instead: under a hot account, OCC degenerates into retry storms at exactly
 the point of maximal contention, while the row-lock queue is scheduled,
@@ -409,10 +409,10 @@ responses. Controllers never invent status codes.
 | `monthly_usage` UNIQUE `(account_id, user_id, period)` NULLS NOT DISTINCT | the `FOR UPDATE` lock targets | the hot path of the entire engine |
 | `monthly_usage` `(account_id, period)` | account-wide usage aggregation for a month | the constraint index is ordered `(account_id, user_id, period)` and cannot serve account+period-only scans efficiently |
 | `consumption_records` UNIQUE `(account_id, request_id)` | idempotency probe | constant-time replay path |
-| `consumption_records` `(account_id, period, created_at DESC)` | audit history by month | spec-mandated |
+| `consumption_records` `(account_id, period, created_at DESC)` | audit history by month | range/sort path for period drilldowns |
 | `consumption_records` `(account_id, user_id, created_at DESC)` | per-user history drilldown | composite prefix covers tenant scoping |
 
-**Deliberate omission:** the reference DDL also listed
+**Deliberate omission:** a first draft of this schema also listed
 `idx_usage_lookup (account_id, user_id, period)` and
 `idx_user_external_account (account_id, external_id)` — exact duplicates of
 the UNIQUE-constraint backing indexes above. PostgreSQL already implements
