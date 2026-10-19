@@ -119,7 +119,24 @@
         <div class="chart-wrap"><canvas id="chart-canvas" aria-label="Consumption timeline chart"></canvas></div>
       </div>
 
-      <div class="card" id="retry-card">
+      <div class="card wide" id="chaos-card">
+        <h2>Chaos / stress mode <span id="chaos-status" class="badge soft"></span></h2>
+        <p class="muted small">
+          Fires N <strong>concurrent</strong> requests at the live engine — the same adversarial
+          storm as the benchmark, from your browser. Invariants are verified against the
+          database totals afterwards: zero over-consumption, exact conservation.
+          <strong>Run it, then watch the timeline above fill in.</strong>
+        </p>
+        <div class="row">
+          <select id="chaos-user"></select>
+          <input id="chaos-count" type="number" min="1" max="500" step="1" value="50" title="Number of concurrent requests" />
+          <input id="chaos-units" type="number" min="1" max="1000" step="1" value="1" title="Units per request" />
+          <button id="chaos-run" class="btn primary">⚡ Run chaos storm</button>
+        </div>
+        <div id="chaos-log" class="log hidden"></div>
+      </div>
+
+      <div class="card wide" id="retry-card">
         <h2>Safe-retry proof (idempotency)</h2>
         <p class="muted small">
           Simulates a dropped connection: sends one consume, then retries the <strong>same requestId</strong> twice.
@@ -132,22 +149,6 @@
           <button id="retry-run" class="btn primary">♻ Prove safe retry</button>
         </div>
         <div id="retry-log" class="log hidden"></div>
-      </div>
-
-      <div class="card wide" id="chaos-card">
-        <h2>Chaos / stress mode <span id="chaos-status" class="badge soft"></span></h2>
-        <p class="muted small">
-          Fires N <strong>concurrent</strong> requests at the live engine — the same adversarial
-          storm as the benchmark, from your browser. Invariants are verified against the
-          database totals afterwards: zero over-consumption, exact conservation.
-        </p>
-        <div class="row">
-          <select id="chaos-user"></select>
-          <input id="chaos-count" type="number" min="1" max="500" step="1" value="50" title="Number of concurrent requests" />
-          <input id="chaos-units" type="number" min="1" max="1000" step="1" value="1" title="Units per request" />
-          <button id="chaos-run" class="btn primary">⚡ Run chaos storm</button>
-        </div>
-        <div id="chaos-log" class="log hidden"></div>
       </div>
 
       <div class="card wide" id="history-card">

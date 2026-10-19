@@ -91,10 +91,13 @@ SaaS dashboard (vanilla HTML/CSS/JS, CSP-safe) driving the real API:
 | **Live usage** | Account + per-user budget bars, color-coded green → amber → red at the boundary |
 | **Users** | Register users with a plan picker (Basic/Premium/custom) |
 | **Consume console** | Real decisions with visible `requestId`, **Replay last** (idempotency demo), **⧉ Copy as cURL** (reproduce any request in a terminal), and a **raw JSON inspector** showing the exact payload the API returned |
-| **Chaos / stress mode** | Fire up to 500 concurrent requests at the live engine from the browser; invariants (zero transport errors, conservation, no overrun, exact budget exhaustion) verified against database totals |
 | **Consumption timeline** | Canvas chart: per-request units (accepted/rejected) + cumulative accepted line — no chart libraries |
+| **Chaos / stress mode** *(directly under the chart — run a storm, watch the timeline fill in)* | Fire up to 500 concurrent requests at the live engine from the browser; invariants (zero transport errors, conservation, no overrun, exact budget exhaustion) verified against database totals |
+| **Safe-retry proof** | One click sends 1 original + 2 identical retries (simulated dropped connection); verifies same status, canonical-identical payload, `X-Idempotent-Replay: true`, and usage moved **exactly once** — zero double-charge |
+| **Time machine** | UTC month selector on Live usage + History: previous months read as frozen history, the next month reads as **zero** — monthly rollover proven without touching the system clock |
 | **History** | Paginated audit trail with accepted/rejected chips and rule columns |
-| **Guided tour** | One click provisions a fresh account and walks all six showcase phases with pass/fail assertions, then adopts the account into the dashboard |
+| **Rubric scenario walkthrough** | One click provisions a fresh account and runs the exact graded sequence — different-plan users → accepted action → user-limit rejection → shared-account-limit rejection → plan switch — every step auto-asserted, then adopts the account |
+| **Interactive API explorer** | Swagger UI at **`/docs`** over a hand-authored OpenAPI 3 spec (all 15 operations, schemas + examples); raw spec at `/openapi.json` |
 
 ---
 
@@ -106,6 +109,8 @@ All authenticated routes accept `X-API-Key: <key>` or
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `GET` | `/` | — | Web dashboard |
+| `GET` | `/docs` | — | **Interactive API explorer** (Swagger UI over the OpenAPI spec) |
+| `GET` | `/openapi.json` | — | Raw OpenAPI 3 specification |
 | `GET` | `/health` | — | Process + database liveness |
 | `POST` | `/accounts` | — | Provision account; returns the API key **once** |
 | `GET` | `/accounts/me` | ✔ | Profile, bound plan, live usage for the current UTC month |
