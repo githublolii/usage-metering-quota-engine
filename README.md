@@ -1,6 +1,10 @@
 # Usage Metering & Quota Engine
 
-![Node](https://img.shields.io/badge/Node-%E2%89%A520.11-339933) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-4169E1) ![Tests](https://img.shields.io/badge/tests-127%20passing-2EA44F) ![License](https://img.shields.io/badge/license-MIT-blue)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-336791?logo=postgresql)](https://www.postgresql.org/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)](https://www.docker.com/)
+[![Tests](https://img.shields.io/badge/Tests-127%20passed-success)]()
+[![License](https://img.shields.io/badge/License-MIT-green)](./LICENSE)
 
 A multi-tenant **usage metering and quota engine** in TypeScript + PostgreSQL.
 
@@ -50,34 +54,38 @@ Every guarantee in this repository has a one-command reproduction:
 13. [Design decisions & trade-offs](#design-decisions--trade-offs)
 14. [Production deployment](#production-deployment)
 15. [Documentation map](#documentation-map)
-16. [License](#license)
+16. [Known Limitations & Scaling Boundaries](#known-limitations--scaling-boundaries)
+17. [License](#license)
 
 ---
 
 ## Quick start
 
-No Docker, no database setup, no environment variables — one prerequisite:
-**Node.js ≥ 20.11**.
+### Option A: Docker Compose (full stack)
+
+Boot the entire stack — PostgreSQL, automated migrations, predefined plan
+seeding, the API, and the web dashboard — in one command:
+
+```bash
+docker compose up --build
+# → http://localhost:3000  (API + dashboard; migrations + seed run at container boot)
+```
+
+### Option B: Local Node.js (embedded PostgreSQL)
+
+Running directly on the host requires **Node.js ≥ 20.11** and nothing else —
+a self-contained embedded PostgreSQL is booted, migrated, and seeded
+automatically:
 
 ```bash
 npm install
-
-# ▶ The website: full dashboard UI on http://localhost:3000
-#   (boots its own embedded PostgreSQL, migrated + seeded automatically)
-npm run serve
-
-# The six-phase guided walkthrough in your terminal (self-hosting, same trick)
-npm run demo
-
-# The full test suite — 127 tests, each run boots a pristine embedded PostgreSQL
-npm test
-
-# The concurrency benchmark — 500-way storms, invariants verified against SQL
-npm run load-test
+npm run serve        # API + dashboard on http://localhost:3000
+npm test             # Full 127-test suite against the embedded PostgreSQL
+npm run load-test    # 500-way concurrent storm benchmark
 ```
 
-Prefer your own PostgreSQL (or Docker Compose)? See
-[Production deployment](#production-deployment).
+The guided six-phase walkthrough also runs in the terminal (`npm run demo`),
+self-hosting the same stack if no server is running.
 
 ---
 
@@ -107,6 +115,22 @@ dashboard (vanilla HTML/CSS/JS, CSP-safe) driving the real API:
 
 All authenticated routes accept `X-API-Key: <key>` or
 `Authorization: Bearer <key>`.
+
+### Predefined Plan Catalog
+
+The service seeds four immutable, ready-to-use plans at boot (via the
+Docker entrypoint or `npm run seed`):
+
+| Scope | Plan Name | Monthly Allowance | Max Units Per Request | Intended Use |
+| :--- | :--- | :--- | :--- | :--- |
+| **Account** | `Starter` | 100 units / mo | 10 units / req | Trial / starter accounts |
+| **Account** | `Pro` | 500 units / mo | 50 units / req | Production enterprise accounts |
+| **User** | `Basic` | 100 units / mo | 20 units / req | Standard user allowance |
+| **User** | `Premium` | 300 units / mo | 50 units / req | Power-user allowance |
+
+Custom plans created via `POST /plans` allow tenants to define arbitrary
+monthly allowances and per-request limits, scoped strictly to their
+account (a custom plan with the same name shadows the predefined one).
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
@@ -566,6 +590,51 @@ makes that safe).
 
 ---
 
+## Known Limitations & Scaling Boundaries
+
+The following architectural boundaries and intentional trade-offs are
+documented as part of the system design:
+
+1. **Single-tenant serialization bottleneck (lock contention).**
+   * *Current architecture:* pessimistic row locking on the account
+     aggregate (`SELECT … FOR UPDATE`) serializes concurrent requests
+     *for that specific account*. Distinct tenants scale independently in
+     parallel, but a single account experiences queue latency under extreme
+     contention (p99 ≈ 2.5 s at 500 concurrent contenders — the price of
+     zero over-consumption; see
+     [`docs/CONCURRENCY_AND_LOCKING.md`](docs/CONCURRENCY_AND_LOCKING.md)).
+   * *Scale horizon:* beyond ~10,000 req/s per tenant, move to sharded
+     sub-counters or a distributed token-bucket cache (e.g., Redis) with
+     asynchronous, batched ledger reconciliation.
+
+2. **Single primary database dependency.**
+   * *Current architecture:* the service requires a single ACID primary
+     database for row locking. Read replicas cannot serve consumption
+     decisions without introducing replication-lag race conditions.
+   * *Scale horizon:* multi-region horizontal scaling requires tenant-based
+     partitioning — sharding accounts across discrete database clusters by
+     `account_id`.
+
+3. **Single resource dimension.**
+   * *Current architecture:* the engine meters a single abstract "unit"
+     currency, per the project scope.
+   * *Scale horizon:* metering multiple orthogonal resource types (e.g.,
+     CPU-seconds, storage gigabytes, API calls) requires extending the
+     ledger schema to composite balance keys
+     `(account_id, user_id, period, resource_type)`.
+
+4. **Synchronous audit-trail writes.**
+   * *Current architecture:* every accepted and rejected decision
+     synchronously inserts an audit row into `consumption_records` within
+     the consumption transaction — the guarantee that counters and history
+     can never diverge.
+   * *Scale horizon:* high write volume will eventually require time-based
+     table partitioning on `period` (dropping or archiving monthly
+     partitions beyond legal retention mandates).
+
+---
+
 ## License
 
-MIT — see the license field in [`package.json`](package.json).
+MIT — see [`LICENSE`](./LICENSE) and the license field in
+[`package.json`](package.json).
