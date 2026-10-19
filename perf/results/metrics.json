@@ -1,0 +1,124 @@
+{
+  "generatedAt": "2026-10-19T10:44:28.625Z",
+  "generator": "npm run load-test (perf/load-test.ts)",
+  "environment": {
+    "nodeVersion": "v24.21.0",
+    "postgresVersion": "PostgreSQL 17.5 on x86_64-windows, compiled by msvc-19.43.34808, 64-bit",
+    "poolMax": 50,
+    "requests": 500,
+    "clientSockets": 200,
+    "period": "2026-10"
+  },
+  "benchmarks": {
+    "quotaOverrunStorm": {
+      "requests": 500,
+      "accepted": 50,
+      "rejected": 450,
+      "transportErrors": 0,
+      "throughputRps": 188.9,
+      "wallSeconds": 2.65,
+      "latency": {
+        "p50": 1907.7742999999991,
+        "p95": 2490.5676999999996,
+        "p99": 2532.464900000001,
+        "min": 652.0829000000012,
+        "max": 2542.979799999999,
+        "mean": 1868.0987942000006
+      },
+      "database": {
+        "accountTotal": 100,
+        "drainer": 50,
+        "racer": 50,
+        "accepted": 55,
+        "rejected": 450
+      },
+      "invariantsPassed": true,
+      "invariants": [
+        {
+          "description": "zero transport errors",
+          "passed": true
+        },
+        {
+          "description": "exactly 50 of 500 requests accepted",
+          "passed": true,
+          "detail": "got 50"
+        },
+        {
+          "description": "all remaining requests rejected by account monthly_allowance",
+          "passed": true,
+          "detail": "got 450 clean rejections, 0 unexpected statuses"
+        },
+        {
+          "description": "database account counter == 100 (50 pre-drained + 50 raced) — ZERO over-consumption",
+          "passed": true,
+          "detail": "DB says 100"
+        },
+        {
+          "description": "drainer consumed exactly 50",
+          "passed": true,
+          "detail": "DB says 50"
+        },
+        {
+          "description": "racer consumed exactly 50 (sums equal the account total)",
+          "passed": true,
+          "detail": "DB says 50"
+        },
+        {
+          "description": "audit trail: 55 accepted records (5 pre-drain + 50 storm)",
+          "passed": true,
+          "detail": "DB says 55"
+        },
+        {
+          "description": "audit trail: every rejected decision persisted",
+          "passed": true,
+          "detail": "DB says 450"
+        }
+      ]
+    },
+    "idempotencyReplayStorm": {
+      "requests": 500,
+      "identicalPayloads": 500,
+      "replayedResponses": 499,
+      "consumptionRecords": 1,
+      "unitsConsumed": 5,
+      "transportErrors": 0,
+      "throughputRps": 468.3,
+      "wallSeconds": 1.07,
+      "latency": {
+        "p50": 585.0679,
+        "p95": 911.7145999999993,
+        "p99": 1026.4916999999987,
+        "min": 186.28170000000136,
+        "max": 1064.804900000001,
+        "mean": 584.4275145999995
+      },
+      "invariantsPassed": true,
+      "invariants": [
+        {
+          "description": "zero transport errors",
+          "passed": true
+        },
+        {
+          "description": "all 500 callers received the IDENTICAL decision payload",
+          "passed": true,
+          "detail": "500 identical"
+        },
+        {
+          "description": "exactly ONE consumption record exists for the shared requestId",
+          "passed": true,
+          "detail": "DB says 1"
+        },
+        {
+          "description": "units consumed exactly ONCE (5 units total)",
+          "passed": true,
+          "detail": "DB says 5"
+        },
+        {
+          "description": "the remaining 499 responses were served as idempotent replays",
+          "passed": true,
+          "detail": "499 replays"
+        }
+      ]
+    }
+  }
+}

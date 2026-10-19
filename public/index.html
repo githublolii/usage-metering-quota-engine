@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Usage Metering & Quota Engine</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%236366f1' d='M13 2 3 14h7l-1 8 10-12h-7l1-8z'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="app.js" defer></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="bolt">⚡</span> Metering Engine <span class="badge">Quota Dashboard</span></div>
+  <div class="session">
+    <span id="health-dot" class="dot" title="API + database health (polled every 10s)"></span>
+    <input id="key-input" type="password" autocomplete="off" spellcheck="false" placeholder="Paste API key (mk_…)" />
+    <button id="key-save" class="btn">Connect</button>
+    <button id="key-clear" class="btn ghost">Clear</button>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ================= Provisioning (shown when not connected) ========= -->
+  <section id="provision-card" class="card">
+    <h2>Provision an account</h2>
+    <p class="muted">
+      Creates a tenant bound to a predefined <strong>ACCOUNT</strong> plan. The API key is generated
+      server-side (256-bit), stored only as a SHA-256 hash, and shown to you <em>exactly once</em>.
+    </p>
+    <div class="row">
+      <input id="acct-name" placeholder="Account name" value="acme-corp" />
+      <select id="acct-plan">
+        <option value="Starter">Starter — 100/mo, max 10/request</option>
+        <option value="Pro">Pro — 500/mo, max 50/request</option>
+      </select>
+      <button id="provision-btn" class="btn primary">Create account</button>
+    </div>
+    <div id="msg-provision" class="msg hidden"></div>
+    <div id="key-banner" class="banner hidden">
+      <div class="banner-title">🔐 <strong>Store this key now</strong> — it will never be shown again:</div>
+      <code id="key-value" class="keyline"></code>
+      <div class="row">
+        <button id="key-copy" class="btn">Copy key</button>
+        <button id="key-use" class="btn primary">Use this account →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= Connected workspace ============================== -->
+  <section id="workspace" class="hidden">
+    <div class="grid">
+
+      <div class="card" id="account-card">
+        <h2>Account</h2>
+        <div id="account-body"><p class="muted">Loading…</p></div>
+        <div class="row">
+          <select id="plan-switch"></select>
+          <button id="plan-apply" class="btn">Apply plan change</button>
+          <button id="rotate-btn" class="btn ghost" title="Invalidate the current key and issue a new one">Rotate key</button>
+        </div>
+        <p class="muted small">Runtime plan mutation — no restart; monotonic usage is preserved.</p>
+        <div id="msg-account" class="msg hidden"></div>
+      </div>
+
+      <div class="card" id="usage-card">
+        <h2>Live usage</h2>
+        <div class="row">
+          <select id="usage-user"></select>
+          <button id="usage-refresh" class="btn ghost" title="Refresh usage views">↻</button>
+        </div>
+        <div id="usage-body"><p class="muted">Loading…</p></div>
+      </div>
+
+      <div class="card" id="users-card">
+        <h2>Users</h2>
+        <ul id="users-list" class="list"><li class="muted">Loading…</li></ul>
+        <div class="row">
+          <input id="new-user" placeholder="userId (external id)" />
+          <select id="new-user-plan"></select>
+          <button id="user-create" class="btn primary">Register</button>
+        </div>
+        <div id="msg-users" class="msg hidden"></div>
+      </div>
+
+      <div class="card" id="consume-card">
+        <h2>Consume units</h2>
+        <div class="row">
+          <select id="consume-user"></select>
+          <input id="consume-units" type="number" min="1" step="1" value="10" />
+          <button id="consume-btn" class="btn primary">Consume</button>
+          <button id="replay-btn" class="btn" title="Send the previous requestId again — idempotent replay">Replay last</button>
+          <button id="curl-copy" class="btn ghost" title="Copy a ready-to-paste cURL command for this exact request (embeds your session key)">⧉ Copy as cURL</button>
+        </div>
+        <div class="muted small">
+          requestId <code id="consume-rid"></code>
+          <button id="rid-new" class="linklike" title="Generate a fresh idempotency key">↻ new</button>
+        </div>
+        <div id="consume-result"></div>
+        <details id="json-details" class="json hidden">
+          <summary>Raw JSON response — the exact payload the API returned</summary>
+          <pre id="json-pre" class="json-pre"></pre>
+        </details>
+      </div>
+
+      <div class="card wide" id="chart-card">
+        <h2>Consumption timeline <span id="chart-totals" class="badge soft"></span></h2>
+        <div class="chart-legend muted small">
+          <span><span class="lg lg-ok">▮</span> per-request units — accepted</span>
+          <span><span class="lg lg-bad">▮</span> per-request units — rejected</span>
+          <span><span class="lg lg-line">—</span> cumulative accepted units (right axis)</span>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-canvas" aria-label="Consumption timeline chart"></canvas></div>
+      </div>
+
+      <div class="card wide" id="history-card">
+        <h2>Consumption history <span id="history-count" class="badge soft"></span></h2>
+        <div class="row">
+          <select id="history-filter">
+            <option value="">All decisions</option>
+            <option value="true">Accepted only</option>
+            <option value="false">Rejected only</option>
+          </select>
+          <button id="history-refresh" class="btn ghost">↻ Refresh</button>
+        </div>
+        <div class="table-wrap">
+          <table id="history-table">
+            <thead>
+              <tr><th>Time (UTC)</th><th>User</th><th>Units</th><th>Decision</th><th>Rule</th><th>requestId</th></tr>
+            </thead>
+            <tbody id="history-rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ================= Guided tour ===================================== -->
+  <section class="card" id="tour-card">
+    <h2>Guided tour — the six showcase phases</h2>
+    <p class="muted">
+      Provisions a <strong>fresh account</strong> and walks the full story live against the real API:
+      accepted consumption → user-rule violation → idempotent replay → account exhaustion at the exact
+      boundary → runtime plan upgrade with usage preserved. Every step is asserted; at the end the
+      dashboard adopts the tour account.
+    </p>
+    <button id="tour-run" class="btn primary">▶ Run guided tour</button>
+    <div id="tour-log" class="log hidden"></div>
+  </section>
+
+</main>
+
+<footer class="foot muted small">
+  Usage Metering & Quota Engine — TypeScript · PostgreSQL · pessimistic row locking · database-enforced idempotency · RFC 7807 errors.
+  <a href="/health">/health</a>
+  <span id="foot-period"></span>
+</footer>
+
+</body>
+</html>
