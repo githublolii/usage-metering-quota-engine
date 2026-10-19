@@ -1,6 +1,6 @@
 # Usage Metering & Quota Engine
 
-![Node](https://img.shields.io/badge/Node-%E2%89%A520.11-339933) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-4169E1) ![Tests](https://img.shields.io/badge/tests-117%20passing-2EA44F) ![License](https://img.shields.io/badge/license-MIT-blue)
+![Node](https://img.shields.io/badge/Node-%E2%89%A520.11-339933) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-4169E1) ![Tests](https://img.shields.io/badge/tests-125%20passing-2EA44F) ![License](https://img.shields.io/badge/license-MIT-blue)
 
 Mission-critical, multi-tenant **usage metering and quota engine** in TypeScript + PostgreSQL.
 
@@ -25,8 +25,9 @@ Every requirement, where it lives, and the one command that proves it:
 | **Tenant isolation + hashed API keys** | SHA-256 digests; every query scoped by `account_id`; foreign resources are indistinguishable from nonexistent | `npm run test:security` |
 | **Monthly reset / previous months** | Period is part of the row key — implicit UTC rollover, frozen history | `npm run test:monthly-reset` |
 | **Boundary rejection correctness** | Pure evaluator unit-tested at limit−1 / limit / limit+1 × all 4 rules | `npm run test:boundary` |
+| **Randomized property-based invariants** | fast-check oracle cross-checks: pure evaluator vs an independent model (1,000 runs) + live-API streams with mid-stream plan flips | `npm run test:property` |
 | **Performance report** | 500-way storms with SQL-verified invariants | `npm run load-test` → [`perf/results/`](./perf/results/) |
-| **The whole suite** | 117 tests, self-contained embedded PostgreSQL | `npm test` |
+| **The whole suite** | 125 tests, self-contained embedded PostgreSQL | `npm test` |
 
 ---
 
@@ -66,7 +67,7 @@ npm run serve
 # The six-phase guided walkthrough in your terminal (self-hosting, same trick)
 npm run demo
 
-# The full test suite — 102 tests, each run boots a pristine embedded PostgreSQL
+# The full test suite — 125 tests, each run boots a pristine embedded PostgreSQL
 npm test
 
 # The concurrency benchmark — 500-way storms, invariants verified against SQL
@@ -90,6 +91,7 @@ SaaS dashboard (vanilla HTML/CSS/JS, CSP-safe) driving the real API:
 | **Live usage** | Account + per-user budget bars, color-coded green → amber → red at the boundary |
 | **Users** | Register users with a plan picker (Basic/Premium/custom) |
 | **Consume console** | Real decisions with visible `requestId`, **Replay last** (idempotency demo), **⧉ Copy as cURL** (reproduce any request in a terminal), and a **raw JSON inspector** showing the exact payload the API returned |
+| **Chaos / stress mode** | Fire up to 500 concurrent requests at the live engine from the browser; invariants (zero transport errors, conservation, no overrun, exact budget exhaustion) verified against database totals |
 | **Consumption timeline** | Canvas chart: per-request units (accepted/rejected) + cumulative accepted line — no chart libraries |
 | **History** | Paginated audit trail with accepted/rejected chips and rule columns |
 | **Guided tour** | One click provisions a fresh account and walks all six showcase phases with pass/fail assertions, then adopts the account into the dashboard |
@@ -336,8 +338,9 @@ this implementation resolves each, and why:
 |---|---|---|
 | `npm run test:unit` | 60 pure-domain tests | Every limit boundary (limit−1 / limit / limit+1 × 4 rules), downgrade semantics, deterministic precedence, programmer-error contracts, Result monad, Zod DTOs |
 | `npm run test:integration` | HTTP tests | The six-phase story end-to-end, idempotent replay of accepted *and* rejected decisions, plan mutation preserving usage, RFC 7807 shapes, cross-tenant IDOR attack suite, rotation atomicity, **custom-plan CRUD lifecycle, monthly reset & previous-month reads** |
-| `npm run test:concurrency` | Race suites | 250-into-50 quota storm, 40-way same-key race, 240-request mixed-user deadlock hunt, **plan mutation racing live consumption** — all asserted against SQL ground truth |
-| `npm test` | All of the above | 117 tests; every run boots a pristine embedded PostgreSQL |
+| `npm run test:concurrency` | Race suites | 250-into-50 quota storm, 40-way same-key race, 240-request mixed-user deadlock hunt, plan mutation racing live consumption — all asserted against SQL ground truth |
+| `npm run test:property` | Property-based (fast-check) | Thousands of generated cases: evaluator vs an independently written model, acceptance/conservation/precedence invariants, randomized live-API streams with mid-stream plan flips cross-checked against an oracle |
+| `npm test` | All of the above | 125 tests; every run boots a pristine embedded PostgreSQL |
 
 CI with an external PostgreSQL: set `TEST_DATABASE_URL` and `npm test` uses
 it instead of booting the embedded one. A committed GitHub Actions workflow
@@ -381,7 +384,7 @@ perf/
 scripts/
   serve.ts · dev-db.ts · seed.ts
 tests/
-  unit/ · integration/ · concurrency/ · helpers/
+  unit/ · integration/ · concurrency/ · helpers/        (+ fast-check property suites: tests/unit/property.test.ts, tests/integration/property-stress.test.ts)
 docs/
   ARCHITECTURE.md · CONCURRENCY_AND_LOCKING.md · INTERVIEW_CHEATSHEET.md · BENCHMARK_REPORT.md
 ```

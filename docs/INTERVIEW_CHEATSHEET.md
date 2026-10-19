@@ -309,3 +309,42 @@ plan would change what every bound subject means; that's a new plan, not a
 patch. And racing plan mutations against live consumption is covered by
 `tests/concurrency/plan-mutation-race.test.ts` (conservation:
 account counter == Σ users == Σ accepted audit units, zero 5xx).
+
+### Q16. Is this an append-only ledger or a mutable counter? Where's the OCC version column? Why one violation instead of a full rule trace?
+
+**Ledger + snapshot, not a bare counter.** `consumption_records` IS the
+immutable append-only ledger — one row per request, accepted *and*
+rejected, carrying the frozen response payload. It's strictly richer than
+a units-only event log because rejections are first-class history, and its
+`UNIQUE (account_id, request_id)` makes the ledger and the idempotency
+registry the *same* rows, so they can never diverge. `monthly_usage` is
+the O(1) balance anchor — a materialized snapshot maintained **atomically
+in the same transaction** as the ledger insert. Reconstruction is
+therefore always provable: Σ accepted-record units for a `(user, period)`
+equals the snapshot counter, an identity the concurrency suites and the
+fast-check property stress assert directly.
+
+**No `version` column, deliberately.** Version counters are for optimistic
+concurrency — and OCC is the wrong tool at this system's exact hot spot:
+500 contenders retrying against one row is a retry storm with unbounded
+tail latency. Pessimistic `FOR UPDATE` queues are scheduled, bounded, and
+make over-consumption impossible by construction. The ledger/snapshot
+pair commits atomically, so there is no version reconciliation to get
+wrong in the first place.
+
+**One deterministic root cause, not a four-rule trace, on the wire.** The
+evaluator checks all four rules with a documented precedence
+(user/per-request → account/per-request → user/monthly → account/monthly)
+and returns the single violated rule with full context — limit, requested,
+current usage, and derived `remainingMonthly`. That *is* the trace's
+`root_cause`, computed deterministically for identical inputs (essential
+for replay equality). A full per-rule trace would bloat every stored
+replay payload and every response for information the client can already
+derive — and the precedence order means an evaluator seeing "user
+per-request" already knows the other three were never the binding
+constraint for this request. Randomized verification that the four rules
+and their precedence behave correctly across thousands of generated cases
+lives in `tests/unit/property.test.ts` (independent-model cross-check) and
+`tests/integration/property-stress.test.ts` (live-API oracle streams with
+mid-stream plan flips).
+

@@ -200,6 +200,12 @@ async function loadUsers() {
   if (previousUsage !== '' || users.some((u) => u.userId === previousUsage)) {
     usageSelect.value = previousUsage;
   }
+
+  const chaosSelect = $('chaos-user');
+  const previousChaos = chaosSelect.value;
+  chaosSelect.innerHTML = userOptions;
+  if (users.some((u) => u.userId === previousChaos)) chaosSelect.value = previousChaos;
+  $('chaos-run').disabled = users.length === 0;
 }
 
 async function loadUsage(userId) {
@@ -561,6 +567,106 @@ function drawChart() {
 }
 
 // ---------------------------------------------------------------------------
+// 6b. Chaos / stress mode — the benchmark storm, in the browser
+// ---------------------------------------------------------------------------
+
+async function runChaos() {
+  const button = $('chaos-run');
+  const user = $('chaos-user').value;
+  const count = Number($('chaos-count').value);
+  const units = Number($('chaos-units').value);
+
+  if (!user || !Number.isInteger(count) || count < 1 || !Number.isInteger(units) || units < 1) {
+    return; // no users registered, or invalid inputs — the button is guarded anyway
+  }
+
+  const log = $('chaos-log');
+  log.innerHTML = '';
+  show(log);
+  const line = (html, cls = '') => {
+    const div = document.createElement('div');
+    div.className = `log-line ${cls}`;
+    div.innerHTML = html;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  };
+  const pass = (text) => line(`<span class="ok">✔</span> ${text}`);
+  const fail = (text) => line(`<span class="bad">✘</span> ${text}`, 'err');
+  const check = (condition, text) => (condition ? pass(text) : fail(text));
+
+  button.disabled = true;
+  button.textContent = '⏳ Storming…';
+  $('chaos-status').textContent = '';
+
+  try {
+    // Snapshot the account before the storm.
+    const before = await api('GET', '/metering/usage');
+    const beforeTotal = before.body?.account?.unitsConsumed ?? 0;
+    const remainingBefore = before.body?.account?.remaining ?? 0;
+
+    line(`firing <strong>${count}</strong> concurrent × ${units}-unit requests as <span class="dim">${escapeHtml(user)}</span>…`, 'dim');
+    const started = performance.now();
+    const responses = await Promise.all(
+      Array.from({ length: count }, () =>
+        api('POST', '/metering/consume', {
+          userId: user,
+          units,
+          requestId: crypto.randomUUID(),
+        }),
+      ),
+    );
+    const seconds = ((performance.now() - started) / 1000).toFixed(2);
+
+    let accepted = 0;
+    let rejected = 0;
+    let errors = 0;
+    let chargedUnits = 0;
+    for (const response of responses) {
+      if (response.status === 200 && response.body?.accepted === true) {
+        accepted += 1;
+        chargedUnits += response.body.unitsConsumed;
+      } else if (response.status === 422) {
+        rejected += 1;
+      } else {
+        errors += 1;
+      }
+    }
+
+    // Database ground truth AFTER the storm.
+    const after = await api('GET', '/metering/usage');
+    const afterTotal = after.body?.account?.unitsConsumed ?? 0;
+    const allowance = after.body?.account?.monthlyAllowance ?? 0;
+    const delta = afterTotal - beforeTotal;
+
+    line(`done in ${seconds}s — <span class="ok">${accepted} accepted</span> · <span class="bad">${rejected} rejected</span>${errors > 0 ? ` · <span class="bad">${errors} transport errors</span>` : ''}`, 'dim');
+    line(`account usage: ${beforeTotal.toLocaleString()} → ${afterTotal.toLocaleString()} (allowance ${allowance.toLocaleString()})`, 'dim');
+
+    check(errors === 0, `zero transport errors (${errors})`);
+    check(delta === chargedUnits, `conservation: DB delta ${delta} == Σ accepted units ${chargedUnits}`);
+    check(afterTotal <= allowance, `no overrun: ${afterTotal.toLocaleString()} ≤ allowance ${allowance.toLocaleString()}`);
+    if (remainingBefore > 0 && chargedUnits >= remainingBefore) {
+      check(chargedUnits === remainingBefore, `exact budget exhaustion: charged ${chargedUnits} == remaining-before ${remainingBefore} (zero over-allocation)`);
+    }
+    if (accepted + rejected === count) {
+      pass(`every request received a definitive decision (${count}/${count})`);
+    }
+
+    const verdict = errors === 0 && delta === chargedUnits && afterTotal <= allowance;
+    $('chaos-status').textContent = verdict
+      ? `${accepted} accepted · ${rejected} rejected · invariants held`
+      : 'INVARIANT VIOLATION';
+
+    await refreshAll();
+  } catch (error) {
+    fail(`transport error: ${error instanceof Error ? error.message : String(error)}`);
+    $('chaos-status').textContent = 'storm failed';
+  } finally {
+    button.disabled = false;
+    button.textContent = '⚡ Run chaos storm';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 7. Guided tour — the six showcase phases (fresh account, fully asserted)
 // ---------------------------------------------------------------------------
 
@@ -810,6 +916,9 @@ function wire() {
 
   // tour
   $('tour-run').addEventListener('click', () => void runTour());
+
+  // chaos
+  $('chaos-run').addEventListener('click', () => void runChaos());
 }
 
 function boot() {

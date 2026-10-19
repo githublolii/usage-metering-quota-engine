@@ -300,6 +300,31 @@ The `rejection_shape` CHECK constraint makes malformed rows impossible:
 audit trail and the idempotency cache are the *same* row, so they can
 never disagree.
 
+### 4.4 Append-only ledger + derived snapshot (the accounting architecture)
+
+The quota state is deliberately split into the same two-piece structure a
+professional accounting system uses:
+
+| Piece | Table | Role |
+|---|---|---|
+| **Immutable ledger** | `consumption_records` | Append-only. One row per REQUEST — accepted AND rejected — with the frozen response payload and rejection forensics. Never updated after commit; richer than a units-only event log because rejections are first-class history too. Its `UNIQUE (account_id, request_id)` doubles as the idempotency registry, so the ledger and the replay cache cannot diverge. |
+| **O(1) balance anchor** | `monthly_usage` | The materialized snapshot the engine reads and locks. Maintained *atomically in the same transaction* as the ledger insert — both commit or neither does, so the snapshot can never drift from the ledger. |
+
+**Point-in-time reconstruction** is therefore always available and
+verifiable: `Σ units_requested` over accepted records for a given
+`(user, period)` equals the snapshot counter exactly (this identity is
+asserted by the concurrency suites and the property-based stress). Reads
+at O(1); full history at O(log n) via the audit indexes.
+
+**Why no `version` column (optimistic concurrency) on the snapshot?** A
+guide-style balances table pairs the ledger with a version counter for OCC
+retries. This engine deliberately uses pessimistic `FOR UPDATE` row locks
+instead: under a hot account, OCC degenerates into retry storms at exactly
+the point of maximal contention, while the row-lock queue is scheduled,
+bounded, and makes over-consumption impossible by construction (see
+[`CONCURRENCY_AND_LOCKING.md`](./CONCURRENCY_AND_LOCKING.md) §5 for the
+full trade-off analysis).
+
 ---
 
 ## 5. Multi-tenant isolation model (IDOR hardening)
